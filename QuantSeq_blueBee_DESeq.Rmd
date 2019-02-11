@@ -1,0 +1,429 @@
+---
+title: "QuantSeq_blueBee_DESeq"
+author: "Swapna Mahurkar-Joshi"
+date: "November 17, 2017"
+output: pdf_document
+---
+# DESeq2 (http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html)
+# Read in QuantSeq data - convert individual files to count matrix
+
+# Libraries
+```{r}
+library(DESeq2)
+library(biomaRt)
+library(edgeR)
+
+```
+
+```{r}
+# bulk rename utiliy https://www.bulkrenameutility.co.uk/Download.php
+# renamed the read_counts.txt from individual files to reflect the sample names (as suggested here https://stackoverflow.com/questions/16266930/how-to-rename-files-in-folders-to-foldername-using-batch-file); when the files were renamed, the following command was used
+files1 <- dir(path = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/Bluebee_subDir/read_counts_data/")
+df1 <- readDGE(files1, path = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/Bluebee_subDir/read_counts_data/", header = F ) 
+allDat <- as.data.frame(df1$counts)
+```
+
+# The Lanes had data from 3 experiments. Create a sample information object with which sample belong to which experiment.
+
+```{r}
+# R21 metadata
+phenoColon <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/DNA_methylation_R21_Analysis/data/rawData/Metadata_colon_methylation.csv", row.names = 1); dim(phenoColon)
+
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/DNA_methylation_R21_Analysis/temp/functional_norm/methBioconductorWorkflow/GRsetPbmcColFunFlt.Rda")
+rm(GRsetPbmcFunFlt)
+pheno1 <- phenoColon[row.names(phenoColon)%in%pData(GRsetColFunFlt)$NDP,]; dim(pheno1)
+pheno1 <- pheno1[pData(GRsetColFunFlt)$NDP,]; dim(pheno1)
+rm(GRsetColFunFlt)
+
+# Permeability metadata
+perMap <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSinetstinalPermeabilityProject/data/technicallyCorrectData/sjoshi_permeability_060117.csv", row.names = 1); dim(perMap)
+
+perMap$BH_Colon_Exam <- ifelse(perMap$BH==1,"C",ifelse(perMap$BH==2,"D",ifelse(perMap$BH==6,"M",ifelse(perMap$BH==5,"U","N"))))
+perMap1 <- perMap[,which(colnames(perMap)%in%colnames(pheno1))]
+methMap1 <- pheno1[,which(colnames(pheno1)%in%colnames(perMap1))]
+methMap1 <- methMap1[,colnames(perMap1)]
+match(colnames(methMap1), colnames(perMap1))
+
+phenoDat <- rbind(methMap1, perMap1); dim(phenoDat)
+
+tecDat <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/data/consistantData/colDat.csv", row.names = 1)
+phenoDat1 <- phenoDat[row.names(phenoDat)%in%row.names(tecDat),]; dim(phenoDat1)
+tecDatCol <- tecDat[-grep("_",row.names(tecDat)),]; dim(tecDatCol)
+
+colDat <-  merge(tecDatCol,phenoDat1, by = "row.names", all=TRUE); dim(colDat)
+colDat$cell_culture <- NULL
+row.names(colDat) <- colDat[,1]
+colDat$Row.names<- NULL
+
+ for (i in 1:dim(colDat)[1]) {
+   if (row.names(colDat)[i]%in% row.names(methMap1)==TRUE)
+   {colDat[i,4]<-1}
+   else if (row.names(colDat)[i]%in% row.names(methMap1)==FALSE)
+   {colDat[i,4]<-0}
+ }
+
+for (i in 1:dim(colDat)[1]) {
+   if (row.names(colDat)[i]%in% row.names(perMap1)==TRUE)
+   {colDat[i,5]<-1}
+    else if (row.names(colDat)[i]%in% row.names(perMap1)==FALSE)
+     {colDat[i,5]<-0}
+        
+   }
+misClin <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/phenoNoMethNoPerm.csv", row.names=1)
+match(colnames(misClin),colnames(colDat))
+for (i in 1:dim(colDat)[1]) 
+  for (j in 1: dim(misClin)[1]) {
+   if (row.names(colDat)[i]%in% row.names(misClin)[j]==TRUE)
+   {colDat[i,6]<-misClin[j,6]}
+    else if (row.names(colDat)[i]%in% row.names(perMap1)==FALSE)
+     {colDat[i,6]<-colDat[i,6]}
+        
+  }
+
+for (i in 1:dim(colDat)[1]) 
+  for (j in 1: dim(misClin)[1]) {
+   if (row.names(colDat)[i]%in% row.names(misClin)[j]==TRUE)
+   {colDat[i,7]<-misClin[j,7]}
+    else if (row.names(colDat)[i]%in% row.names(perMap1)==FALSE)
+     {colDat[i,7]<-colDat[i,7]}
+        
+  }
+
+for (i in 1:dim(colDat)[1]) 
+  for (j in 1: dim(misClin)[1]) {
+   if (row.names(colDat)[i]%in% row.names(misClin)[j]==TRUE)
+   {colDat[i,24]<-misClin[j,24]}
+    else if (row.names(colDat)[i]%in% row.names(perMap1)==FALSE)
+     {colDat[i,24]<-colDat[i,24]}
+        
+  }
+
+for (i in 1:dim(colDat)[1]) 
+  for (j in 1: dim(misClin)[1]) {
+   if (row.names(colDat)[i]%in% row.names(misClin)[j]==TRUE)
+   {colDat[i,8]<-misClin[j,8]}
+    else if (row.names(colDat)[i]%in% row.names(perMap1)==FALSE)
+     {colDat[i,8]<-colDat[i,8]}
+        
+}
+
+
+save(colDat, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/colDat.rda")
+
+
+exprColDat <- allDat[,-c(1:12,185:192)]; dim(exprColDat )
+colnames(exprColDat) <- substr(colnames(exprColDat),1,5)
+exprColDat <- exprColDat[,row.names(colDat)]; dim(exprColDat)
+match(row.names(colDat), colnames(exprColDat))
+
+cellCul <- allDat[,c(1:12,185:192)] 
+cellColData <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/cellColData.csv", row.names= 1)
+cellColData <- cellColData[colnames(cellCul),]
+match(row.names(cellColData), colnames(cellCul))
+row.names(cellColData) <- cellColData[,3]
+colnames(cellCul) <- cellColData[,3]
+
+save(colDat, exprColDat, cellCul, cellColData, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/allRNASeqData.Rda")
+
+save(colDat, exprColDat, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/colonTissueRNASeqData.Rda")
+
+save(  cellCul, cellColData, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/cellCultureRNASeqData.Rda")
+
+```
+
+```{r}
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/colonTissueRNASeqData.Rda")
+
+colDat$Group <- as.factor(colDat$Group)
+colDat$Lane<- as.factor(colDat$Lane)
+colDat$Sex <- as.factor(colDat$Sex)
+colDat$BH_Colon_Exam<- as.factor(colDat$BH_Colon_Exam)
+
+```
+
+# Function to output annotated results from counts data using deseq: includes, parsing, filtering and comparing gene-expression data according to defined contrasts.
+
+```{r}
+# x = count
+# y = colDat
+# a = main variable
+# b = adjust variable
+# d = filter counts
+# an = feature data
+deseqOut <- function(x, y, a, b, d,an) {
+  a <-  substitute(a)
+  b <- substitute(b)
+  var_a <- setNames(as.list(seq_along(y)), names(y))
+  aN <- names(var_a[which(names(var_a)%in%a)])
+  bN <- names(var_a[which(names(var_a)%in%b)])
+  str1 <- "~"
+  str2 <- paste(bN,aN, sep = "+")
+  strAll=paste(str1,str2,sep = " ")
+  dds <- DESeqDataSetFromMatrix (countData = x, colData = y, design = eval(parse(text=strAll)))
+  print(dds)
+  keep <-  rowSums(counts(dds)) >= d
+  dds <- dds[keep,]
+  dds <- DESeq(dds)
+  featureData <- as.data.frame(matrix(NA, nrow = dim(dds)[1], ncol = dim(an)[2]))
+  for ( i in 1:dim(dds)[1]) {
+  if(row.names(dds)[i] %in%  an[,1] == TRUE) {
+  featureData[i,] <- an[which(an[,1] %in% row.names(dds)[i]),]
+      }
+    else if(row.names(dds)[i] %in%  an[,1] == FALSE) {
+    featureData[i,] <- c(NA,NA,NA)
+    }
+  }
+  mcols(dds) <- cbind(mcols(dds),featureData)
+  row.names(mcols(dds)) <- row.names(dds)
+  var1 <- y[,which(names(var_a)%in%a)]
+  res <- results(dds, contrast=c(a,levels(factor(var1))[2],levels(factor(var1))[1]))
+  mcols(dds) <- cbind(mcols(dds), res)
+  resAn <- mcols(dds)
+  return(resAn)
+}
+
+```
+
+```{r}
+# For all 172 samples
+# 1. Group differences and lane differences
+QDxRes <- deseqOut(exprColDat, colDat, "Group", "Lane", 5, an)
+# 2. Sex differences and lane differences
+QSexRes <- deseqOut(exprColDat, colDat, "Sex", "Lane", 5, an)
+```
+
+```{r}
+# IBS only samples
+# IBS_men vs IBS_Women
+colDatIBS <- subset(colDat, colDat$Group=="2"); dim(colDatIBS)
+# [1] 110  24
+exprColDatIBS <- exprColDat[,colnames(exprColDat)%in%row.names(colDatIBS)]; dim(exprColDatIBS)
+# [1] 60204   110
+
+# Women only samples
+# IBS_women vs HC_women
+colDatF <- subset(colDat, colDat$Sex=="2"); dim(colDatF)
+# [1] 101  24
+exprColDatF <- exprColDat[,colnames(exprColDat)%in%row.names(colDatF)]; dim(exprColDatF)
+# [1] 60204   101
+
+# men only samples
+# IBS_men vs HC men
+colDatM <- subset(colDat, colDat$Sex=="1"); dim(colDatM)
+# [1] 71 24
+exprColDatM <- exprColDat[,colnames(exprColDat)%in%row.names(colDatM)]; dim(exprColDatM)
+# [1] 60204    71
+
+# normal only samples
+# HC men vs HC women
+colDatHC <- subset(colDat, colDat$Group=="1"); dim(colDatHC)
+# [1] 62 24
+exprColDatHC <- exprColDat[,colnames(exprColDat)%in%row.names(colDatHC)]; dim(exprColDatHC)
+# [1] 60204    62
+
+
+QIBSOnlySexRes <- deseqOut(exprColDatIBS, colDatIBS, "Sex", "Lane", 5, an)
+QIBSOnlySexResFdr01 <- as.data.frame(subset(QIBSOnlySexRes, QIBSOnlySexRes$padj<0.1)); dim(QIBSOnlySexResFdr01)
+
+QWomOnlyIBSRes <- deseqOut(exprColDatF, colDatF, "Group", "Lane", 5, an)
+QWomOnlyIBSResFdr01 <- as.data.frame(subset(QWomOnlyIBSRes, QWomOnlyIBSRes$padj<0.1)); dim(QWomOnlyIBSResFdr01)
+
+QMenOnlyIBSRes <- deseqOut(exprColDatM, colDatM, "Group", "Lane", 5, an)
+QMenOnlyIBSResFdr01 <- as.data.frame(subset(QMenOnlyIBSRes, QMenOnlyIBSRes$padj<0.1)); dim(QMenOnlyIBSResFdr01)
+
+QHCOnlySexRes <- deseqOut(exprColDatHC, colDatHC, "Sex", "Lane", 5, an)
+QHCOnlySexResFdr01 <- as.data.frame(subset(QHCOnlySexRes, QHCOnlySexRes$padj<0.1)); dim(QHCOnlySexResFdr01)
+
+save(QIBSOnlySexRes, QWomOnlyIBSRes, QMenOnlyIBSRes, QHCOnlySexRes, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/IBS_Sex_interaction_QRNASeq.Rda")
+
+write.csv(QIBSOnlySexRes, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QIBSOnlySexRes.csv")
+
+write.csv(QWomOnlyIBSRes, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QWomOnlyIBSRes.csv")
+
+write.csv(QMenOnlyIBSRes, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QMenOnlyIBSRes.csv")
+
+write.csv(QHCOnlySexRes, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QHCOnlySexRes.csv")
+
+```
+
+# R21 gene expression and methylation data integration
+```{r}
+
+
+
+
+
+
+
+
+
+QIBSOnlySexRes <- deseqOut(exprColDatIBS, colDatIBS, "Sex", "Lane", 5, an)
+QIBSOnlySexResFdr01 <- as.data.frame(subset(QIBSOnlySexRes, QIBSOnlySexRes$padj<0.1)); dim(QIBSOnlySexResFdr01)
+
+```
+
+# Integration
+
+```{r}
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/featureData.rda")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/norRNAseqGr.rda")
+load( "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/colonTissueRNASeqData.Rda")
+# R21 related samples only
+colDatR21 <- subset(colDat, colDat$Methylation==1); dim(colDatR21)
+# [1] 133  24
+# normalized data
+exprColDatR21 <- norRNAseqGr[,colnames(norRNAseqGr)%in%row.names(colDatR21)]; dim(exprColDatR21)
+# [1] 29192   133
+
+load("C:/Users/swapnajoshi-admin/Box Sync/DNA_methylation_R21_Analysis/temp/functional_norm/methBioconductorWorkflow/GRsetPbmcColFunFlt.Rda")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/DNA_methylation_R21_Analysis/temp/hm450annotations.rda")
+ann450kSub <- hm450annotations[match(featureNames(GRsetColFunFlt),hm450annotations$Name),c(1:4,12:19,24:ncol(hm450annotations))] 
+
+datBeta <- getBeta(GRsetColFunFlt); dim(datBeta)
+colnames(datBeta) <-  substr(colnames(datBeta),1,5)
+datBeta <- datBeta[ ,colnames(datBeta)%in%row.names(colDatR21)]; dim(datBeta)
+# [1] 420257    133
+datBeta <- datBeta[ ,row.names(colDatR21)]; dim(datBeta)
+match(row.names(colDatR21), colnames(datBeta))
+match(colnames(exprColDatR21), colnames(datBeta))
+all(rownames(exprColDatR21) == featureData$ensembl_gene_id)
+exprColDatR21 <- as.data.frame(exprColDatR21)
+exprColDatR21$GeneSymbol <-  featureData$V2
+all(rownames(datBeta) == row.names(ann450kSub))
+datBeta <- as.data.frame(datBeta)
+datBeta$GeneSymbol <-  ann450kSub$UCSC_RefGene_Name
+datBeta$SD1 <- apply(datBeta[,1:133],1,sd)
+datBeta1 <- datBeta[order(-datBeta$SD1),][1:50000,]
+datBeta1$SD1 <- NULL
+
+
+save(datBeta1, datBeta, exprColDatR21, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/DNA_methylation_R21_Analysis/temp/methExprIntegrAllR21.Rda")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/DNA_methylation_R21_Analysis/temp/methExprIntegrAllR21.Rda")
+df1 <- merge(datBeta1, exprColDatR21, by = "GeneSymbol", all.x = TRUE)
+df2 <-  t(df1)
+df3 <- cbind(df2[2:133,],df2[134:267])
+save(df3, file =  "df3.rda")
+save(df1, file =  "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/DNA_methylation_R21_Analysis/temp/df1.rda")
+
+
+
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/DNA_methylation_R21_Analysis/temp/geMeth_df_50k.rda")
+df6 <- matrix(as.numeric(as.character(df5)), nrow = dim(df5)[1], ncol= dim(df5)[2])
+colnames(df6) <- colnames(df5)
+row.names(df6) <- substr(row.names(df5),1,5)
+df6Ibs <- df6[row.names(df6)%in%row.names(colDatR21[colDatR21$Group==2,]),]; dim(df6Ibs)
+sig_df <- matrix(NA, nrow = 28731, ncol = 2)
+for ( i in 1:28731) 
+   {
+  sig_df[i,1] <- cor.test(df6Ibs[,i], df6Ibs[,i+28731 ], method = 'spearman')$estimate
+   sig_df[i,2] <- cor.test(df6Ibs[,i], df6Ibs[,i+28731 ], method = 'spearman')$p.value
+  }
+sig_df <-  as.data.frame(sig_df)
+# sig_df$Symbol <- gsub("_Meth","",colnames(df4_1)[1:50000])
+colnames(sig_df) <- c("Cor estimate", "p_value")
+sig_df <- as.data.frame(sig_df)
+sig_df$GeneSymbol <- colnames(df6Ibs)[1:28731]
+sig_df$FDR_BH <- p.adjust(sig_df$p_value)
+sigfdr_0p05 <- sig_df[which(sig_df$FDR_BH<0.05),]; dim(sigfdr_0p05)
+sig0p05 <- sig_df[which(sig_df$p_value<0.05),]
+save(sig_df,df6Ibs,df6, sigfdr_0p05, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/DNA_methylation_R21_Analysis/temp/GeneSil50kResults.Rda")
+write.csv(sigfdr_0p05, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/DNA_methylation_R21_Analysis/temp/sigMethGECorr50k.csv")
+which(sig_df$FDR_BH<0.05)
+df_plots <-  as.data.frame(df6Ibs[,c( 11051, 12120, 12124, 12126, 13623,  13626, 13628, 16588, 17177, 17178, 22900, 22901, 22902, 25387,11051+28731, 12120+28731, 12124+28731, 12126+28731, 13623+28731, 13626+28731, 13628+28731, 16588+28731, 17177+28731, 17178+28731, 22900+28731, 22901+28731, 22902+28731, 25387+28731)])
+colDatR21Ibs <- colDatR21[colDatR21$Group==2,]
+match(row.names(colDatR21Ibs),row.names(df_plots))
+df_plots$BH <- as.factor(colDatR21Ibs$BH_Colon_Exam)
+df_plots$BH <- gsub("U","M",df_plots$BH)
+save(sigfdr_0p05, file = "sigfdrIbs_0p05_ge_meth_cor_50k.rda")
+save(sig0p05, file = "sig0p05Ibs_ge_meth_cor_50k.rda")
+library(ggplot2)
+ggsave(ggplot(df_plots, aes(x=ASPG_Meth, y= ASPG_Expr))    + geom_point(aes(color = Group)) + labs(x = colnames(df_plots)[1], y = colnames(df_plots)[33]) + geom_smooth(aes(color = Group),method = lm), file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/ASPG_Meth_GE.png",height = 4, width=4, units= "in")
+
+# for ( i in 1:14) {
+#   p <- list()
+#   p[[i]] <- ggplot(df_plots, aes(x=df_plots[,i], y= df_plots[,i+14]))    + geom_point(aes(color = Group)) + labs(x = colnames(df_plots)[i], y = colnames(df_plots)[i+14]) + geom_smooth(aes(color = Group),method = lm)
+#   ggsave(p[[i]], file= paste("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/meth_ge_cor_plots_50k/",paste(paste(colnames(df_plots)[i],i,sep = ""),".png", sep = ""),sep = "_"),height = 4, width=4, units= "in")
+# }
+
+library(ggplot2)
+for ( i in 1:14) {
+  p <- list()
+  p[[i]] <- ggplot(df_plots, aes(x=df_plots[,i], y= df_plots[,i+14])) + geom_point(aes(color = BH)) + labs(x = colnames(df_plots)[i], y = colnames(df_plots)[i+14]) + geom_smooth(aes(color = BH),method = lm)
+  ggsave(p[[i]], file= paste("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/meth_ge_cor_plots_50k/",paste(paste(colnames(df_plots)[i],i,sep = ""),"BH.png", sep = ""),sep = "_"),height = 4, width=4, units= "in")
+}
+
+library(knitr)
+kable(sigfdr_0p05)
+```
+
+```{r}
+# Permeability related samples only
+colDatPerm <- subset(colDat, colDat$Permeability==1); dim(colDatPerm)
+# [1] 58  24
+exprColDatPerm <- exprColDat[,colnames(exprColDat)%in%row.names(colDatPerm)]; dim(exprColDatPerm)
+# [1] 60204   58
+QIBSOnlySexRes <- deseqOut(exprColDatIBS, colDatIBS, "Sex", "Lane", 5, an)
+QIBSOnlySexResFdr01 <- as.data.frame(subset(QIBSOnlySexRes, QIBSOnlySexRes$padj<0.1)); dim(QIBSOnlySexResFdr01)
+```
+
+```{r}
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("MethylMix")
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("COHCAP")
+library("COHCAP")
+beta.table = datBeta
+sample.file = pheno2
+expression.file = norRNAseq
+project.folder = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/"
+project.name = "450k_methylationGE_integration"
+filtered.sites <- COHCAP.site(sample.file, beta.table, project.name, project.folder, ref="Groups", methyl.cutoff=0.7, unmethyl.cutoff = 0.3, paired=TRUE, delta.beta.cutoff = 0.05, pvalue.cutoff=0.05,fdr.cutoff=0.5, num.groups=2, plot.heatmap=TRUE, output.format = "txt")
+
+
+library(MethylMix)
+library(doParallel)
+cl <- makeCluster(1)
+registerDoParallel(cl)
+
+meth1 <- datBeta[-which(datBeta$GeneSymbol==""),]
+s1 <- strsplit(meth1$GeneSymbol,";")
+n <- max(sapply(s1, length))
+l <- lapply(s1, function(X) c(X, rep(NA, n - length(X))))
+meth1$GeneSymbol <- NULL
+meth1$GeneSymbol <- data.frame(t(do.call(cbind, l)))[1]
+# select a CpG site with highest sd per gene
+meth1 <- meth1[order(meth1$GeneSymbol,-meth1$SD1),]
+meth2 <- meth1[which(!duplicated(meth1$GeneSymbol)),]
+meth2$SD1 <- NULL
+meth2[,134] <- setNames(meth2[,134], "GeneSymbol")
+rownames(meth2) <- meth2$GeneSymbol
+meth2$GeneSymbol <- NULL
+
+exprColDatR21 <- as.data.frame(exprColDatR21); dim(exprColDatR21)
+expr1 <- exprColDatR21[-which(exprColDatR21$GeneSymbol==""),]; dim(expr1)
+expr1 <- expr1[-which(is.na(expr1$GeneSymbol)),]; dim(expr1)
+expr1$sd1 <- apply(expr1,1,sd, na.rm =TRUE)
+expr1 <- expr1[order(expr1$GeneSymbol,-expr1$sd1),]
+expr2 <- subset(expr1, expr1$sd1!=0); dim(expr2)
+expr2 <- expr2[which(!duplicated(expr2$GeneSymbol)),]; dim(expr2)
+expr2$SD1 <- NULL
+rownames(expr2) <- expr2$GeneSymbol
+expr2$GeneSymbol <- NULL
+
+# meth1[,134] <- setNames(meth1[,134], "GeneSymbol")
+methIbs <-  meth2[,colnames(meth2) %in% row.names(colDatR21[colDatR21$Group==2,])]; dim(methIbs)
+methHc <- meth2[,colnames(meth2) %in% row.names(colDatR21[colDatR21$Group==1,])]; dim(methHc)
+exprIbs <- expr2[row.names(expr2)%in%row.names(methIbs), colnames(expr2)%in%colnames(methIbs)]; dim(exprIbs)
+methIbs <- methIbs[row.names(methIbs)%in%row.names(exprIbs),]; dim(methIbs)
+methIbs <- methIbs[row.names(exprIbs), colnames(exprIbs)]
+methHc <- methHc[row.names(methHc)%in%row.names(methIbs),]; dim(methHc)
+methHc <- methHc[row.names(methIbs),]; dim(methHc)
+
+METibs = matrix(data = methIbs, nrow = 14528, ncol = 97)
+METnormal = matrix(data = methHc, nrow = 14528, ncol = 36)
+GEibs = matrix(data = exprIbs, nrow = 14528, ncol = 97)
+# ClusterProbes(METibs, METnormal, CorThreshold = 0.4)
+save(METibs, METnormal, GEibs, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/methylMixInputIBS.Rda")
+MethylMixResults <- MethylMix(METibs, GEibs, METnormal)
+```
+

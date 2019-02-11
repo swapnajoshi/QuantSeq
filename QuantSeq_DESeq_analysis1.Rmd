@@ -1,0 +1,350 @@
+---
+title: "QuantSeq_blueBee_DESeq"
+author: "Swapna Mahurkar-Joshi"
+date: "November 17, 2017"
+output: pdf_document
+---
+# DESeq2 (http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html)
+# Read in QuantSeq data - convert individual files to count matrix
+
+# Libraries
+```{r}
+library(DESeq2)
+library(biomaRt)
+library(devtools)
+```
+
+# The Lanes had data from 3 experiments. Create a sample information object for different projects.
+
+```{r}
+# R21 metadata
+phenoColon <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/data1/raw_data/idats/Metadata_colon_methylation.csv", row.names = 1); dim(phenoColon)
+
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/temp1/res3_functional_norm/methBioconductorWorkflow/GRsetPbmcColFunFlt.Rda")
+
+rm(GRsetPbmcFunFlt)
+pheno1 <- phenoColon[row.names(phenoColon)%in%pData(GRsetColFunFlt)$NDP,]; dim(pheno1)
+pheno1 <- pheno1[pData(GRsetColFunFlt)$NDP,]; dim(pheno1)
+rm(GRsetColFunFlt)
+
+# Permeability metadata
+perMap <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSinetstinalPermeabilityProject/data/technicallyCorrectData/sjoshi_permeability_060117.csv", row.names = 1); dim(perMap)
+
+perMap$BH_Colon_Exam <- ifelse(perMap$BH==1,"C",ifelse(perMap$BH==2,"D",ifelse(perMap$BH==6,"M",ifelse(perMap$BH==5,"U","N"))))
+perMap1  <- perMap[,which(colnames(perMap)%in%colnames(pheno1))]
+methMap1 <- pheno1[,which(colnames(pheno1)%in%colnames(perMap1))]
+methMap1 <- methMap1[,colnames(perMap1)]
+match(colnames(methMap1), colnames(perMap1))
+
+phenoDat <- rbind(methMap1, perMap1); dim(phenoDat)
+
+tecDat <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/data/consistantData/colDat.csv", row.names = 1)
+phenoDat1 <- phenoDat[row.names(phenoDat)%in%row.names(tecDat),]; dim(phenoDat1)
+tecDatCol <- tecDat[-grep("_",row.names(tecDat)),]; dim(tecDatCol)
+
+colDat <-  merge(tecDatCol,phenoDat1, by = "row.names", all=TRUE); dim(colDat)
+colDat$cell_culture <- NULL
+row.names(colDat) <- colDat[,1]
+colDat$Row.names<- NULL
+
+ for (i in 1:dim(colDat)[1]) {
+   if (row.names(colDat)[i]%in% row.names(methMap1)==TRUE)
+   {colDat[i,4]<-1}
+   else if (row.names(colDat)[i]%in% row.names(methMap1)==FALSE)
+   {colDat[i,4]<-0}
+ }
+
+for (i in 1:dim(colDat)[1]) {
+   if (row.names(colDat)[i]%in% row.names(perMap1)==TRUE)
+   {colDat[i,5]<-1}
+    else if (row.names(colDat)[i]%in% row.names(perMap1)==FALSE)
+     {colDat[i,5]<-0}
+        
+   }
+misClin <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/phenoNoMethNoPerm.csv", row.names=1)
+match(colnames(misClin),colnames(colDat))
+for (i in 1:dim(colDat)[1]) 
+  for (j in 1: dim(misClin)[1]) {
+   if (row.names(colDat)[i]%in% row.names(misClin)[j]==TRUE)
+   {colDat[i,6]<-misClin[j,6]}
+    else if (row.names(colDat)[i]%in% row.names(perMap1)==FALSE)
+     {colDat[i,6]<-colDat[i,6]}
+        
+  }
+
+for (i in 1:dim(colDat)[1]) 
+  for (j in 1: dim(misClin)[1]) {
+   if (row.names(colDat)[i]%in% row.names(misClin)[j]==TRUE)
+   {colDat[i,7]<-misClin[j,7]}
+    else if (row.names(colDat)[i]%in% row.names(perMap1)==FALSE)
+     {colDat[i,7]<-colDat[i,7]}
+        
+  }
+
+for (i in 1:dim(colDat)[1]) 
+  for (j in 1: dim(misClin)[1]) {
+   if (row.names(colDat)[i]%in% row.names(misClin)[j]==TRUE)
+   {colDat[i,24]<-misClin[j,24]}
+    else if (row.names(colDat)[i]%in% row.names(perMap1)==FALSE)
+     {colDat[i,24]<-colDat[i,24]}
+        
+  }
+
+for (i in 1:dim(colDat)[1]) 
+  for (j in 1: dim(misClin)[1]) {
+   if (row.names(colDat)[i]%in% row.names(misClin)[j]==TRUE)
+   {colDat[i,8]<-misClin[j,8]}
+    else if (row.names(colDat)[i]%in% row.names(perMap1)==FALSE)
+     {colDat[i,8]<-colDat[i,8]}
+        
+}
+save(colDat, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/colDat.rda")
+
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/rnaQuantseqAllExpr.rda")
+```
+
+```{r}
+
+exprColDat <- allDat[,-c(1:12,185:192)]; dim(exprColDat )
+colnames(exprColDat) <- substr(colnames(exprColDat),1,5)
+exprColDat <- exprColDat[,row.names(colDat)]; dim(exprColDat)
+match(row.names(colDat), colnames(exprColDat))
+
+cellCul     <- allDat[,c(1:12,185:192)] 
+cellColData <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/cellColData.csv", row.names= 1)
+cellColData <- cellColData[colnames(cellCul),]
+match(row.names(cellColData), colnames(cellCul))
+row.names(cellColData) <- cellColData[,3]
+colnames(cellCul)      <- cellColData[,3]
+
+save(colDat, exprColDat, cellCul, cellColData, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/allRNASeqData.Rda")
+
+save(colDat, exprColDat, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/colonTissueRNASeqData.Rda")
+
+save(  cellCul, cellColData, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/cellCultureRNASeqData.Rda")
+
+```
+
+```{r}
+library(biomaRt)
+listEnsembl()
+mart.hs <- useMart("ensembl", "hsapiens_gene_ensembl")
+datasets <- listDatasets(useMart("ensembl"))
+an <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol", "chromosome_name"), filters = "ensembl_gene_id", values = row.names(exprColDat), mart = mart.hs);dim(an)
+save (an, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/an.rda")
+```
+
+```{r}
+source('~/GIT_workspace/QuantSeq_RNAseq/src/QuantSeqSJ/R/quantSeq_functions1.R', encoding = 'UTF-8')
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/colonTissueRNASeqData.Rda")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/an.rda")
+
+colDat$Group <- as.factor(colDat$Group)
+colDat$Lane<- as.factor(colDat$Lane)
+colDat$Sex <- as.factor(colDat$Sex)
+colDat$BH_Colon_Exam<- as.factor(colDat$BH_Colon_Exam)
+```
+
+```{r}
+# For all 172 samples
+# 1. Group differences and lane differences
+all.equal(row.names(colDat),colnames(exprColDat))
+colDat$Group <- as.factor(colDat$Group)
+colDat$Lane<- as.factor(colDat$Lane)
+QDxRes1 <- deseqOut(exprColDat, colDat, "Group", "Lane", 5)
+# 2. Sex differences and lane differences
+QSexRes <- deseqOut(exprColDat, colDat, "Sex", "Lane", 5, an)
+```
+
+```{r}
+# For R21 samples
+
+# 1. Group differences and lane differences
+colDatR21 <- subset(colDat, colDat$Methylation==1)
+exprColDatR21 <- exprColDat[,colnames(exprColDat)%in%row.names(colDatR21)]
+all.equal(row.names(colDatR21),colnames(exprColDatR21))
+colDatR21$Group <- as.factor(colDatR21$Group)
+colDatR21$Lane<- as.factor(colDatR21$Lane)
+QDxResR21 <- deseqOut(exprColDatR21, colDatR21, "Group", "Lane", 5, an)
+save(QDxResR21, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/QDxResR21.rda")
+
+# 2. Sex differences and lane differences
+QSexResR21 <- deseqOut(exprColDatR21, colDatR21, "Sex", "Lane", 5, an)
+
+```
+
+
+```{r}
+# IBS only samples
+# IBS_men vs IBS_Women
+colDatR21IBS <- subset(colDatR21, colDatR21$Group=="2"); dim(colDatR21IBS)
+# [1] 97  24
+exprColDatR21IBS <- exprColDatR21[,colnames(exprColDatR21)%in%row.names(colDatR21IBS)]; dim(exprColDatR21IBS)
+# [1] 60204   97
+
+# Women only samples
+# IBS_women vs HC_women
+colDatR21F <- subset(colDatR21, colDatR21$Sex=="2"); dim(colDatR21F)
+# [1] 82  24
+colDatR21$Lane <- as.factor(colDatR21$Lane)
+exprColDatR21F <- exprColDatR21[,colnames(exprColDatR21)%in%row.names(colDatR21F)]; dim(exprColDatR21F)
+# [1] 60204   82
+
+# men only samples
+# IBS_men vs HC men
+colDatR21M <- subset(colDatR21, colDatR21$Sex=="1"); dim(colDatR21M)
+# [1] 71 24
+exprColDatR21M <- exprColDatR21[,colnames(exprColDatR21)%in%row.names(colDatR21M)]; dim(exprColDatR21M)
+# [1] 60204    71
+
+# normal only samples
+# HC men vs HC women
+colDatR21HC <- subset(colDatR21, colDatR21$Group=="1"); dim(colDatR21HC)
+# [1] 62 24
+exprColDatR21HC <- exprColDatR21[,colnames(exprColDatR21)%in%row.names(colDatR21HC)]; dim(exprColDatR21HC)
+# [1] 60204    62
+```
+
+```{r}
+QIBSOnlySexRes <- deseqOut(exprColDatR21IBS, colDatR21IBS, "Sex", "Lane", 5,an)
+QIBSOnlySexRes1 <- subset(QIBSOnlySexRes, QIBSOnlySexRes$GeneSymbol!="")
+QIBSOnlySexRes1$NewFDR <- p.adjust(QIBSOnlySexRes1$pvalue)
+QIBSOnlySexResFdr02 <- as.data.frame(subset(QIBSOnlySexRes, QIBSOnlySexRes$NewFDR<0.2)); dim(QIBSOnlySexResFdr02)
+
+QWomOnlyIBSRes <- deseqOut(exprColDatR21F, colDatR21F, "Group", "Lane", 5,an)
+QWomOnlyIBSRes <- QWomOnlyIBSRes[order(QWomOnlyIBSRes$pvalue),]
+QWomOnlyIBSRes1 <- subset(QWomOnlyIBSRes, QWomOnlyIBSRes$GeneSymbol!="")
+QWomOnlyIBSRes1$NewFDR <- p.adjust(QWomOnlyIBSRes1$pvalue, method = "BH")
+QWomOnlyIBSResFdr02 <- as.data.frame(subset(QWomOnlyIBSRes1, QWomOnlyIBSRes1$NewFDR <0.20)); dim(QWomOnlyIBSResFdr02)
+# [1] 4 8
+
+QMenOnlyIBSRes <- deseqOut(exprColDatR21M, colDatR21M, "Group", "Lane", 5,an)
+QMenOnlyIBSRes <- QMenOnlyIBSRes[order(QMenOnlyIBSRes$pvalue),]
+QMenOnlyIBSRes1 <- subset(QMenOnlyIBSRes, QMenOnlyIBSRes$GeneSymbol!="")
+QMenOnlyIBSRes1$NewFDR <- p.adjust(QMenOnlyIBSRes1$pvalue, method = "BH")
+QMenOnlyIBSResFdr02 <- as.data.frame(subset(QMenOnlyIBSRes, QMenOnlyIBSRes$padj<0.20)); dim(QMenOnlyIBSResFdr02)
+
+QHCOnlySexRes <- deseqOut(exprColDatR21HC, colDatR21HC, "Sex", "Lane", 5,an)
+QHCOnlySexResFdr01 <- as.data.frame(subset(QHCOnlySexRes, QHCOnlySexRes$padj<0.1)); dim(QHCOnlySexResFdr01)
+```
+
+```{r}
+save(QIBSOnlySexRes, QWomOnlyIBSRes, QMenOnlyIBSRes, QHCOnlySexRes, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/IBS_Sex_interaction_QRNASeq.Rda")
+
+write.csv(QIBSOnlySexRes, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QIBSOnlySexRes.csv")
+
+write.csv(QWomOnlyIBSRes, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QWomOnlyIBSRes.csv")
+
+write.csv(QMenOnlyIBSRes, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QMenOnlyIBSRes.csv")
+
+write.csv(QHCOnlySexRes, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QHCOnlySexRes.csv")
+
+```
+
+```{r}
+QIBSOnlySexRes <- deseqOut(exprColDatIBS, colDatIBS, "Sex", "Lane", 5, an)
+QIBSOnlySexResFdr01 <- as.data.frame(subset(QIBSOnlySexRes, QIBSOnlySexRes$padj<0.1)); dim(QIBSOnlySexResFdr01)
+```
+
+```{r}
+# atleast 1 count in 35 samples
+df_temp <- matrix(NA, ncol=dim(exprColDatR21IBS)[2], nrow=dim(exprColDatR21IBS)[1])
+for ( i in 1: length(rownames(exprColDatR21IBS))){
+  for(j in 1: length(colnames(exprColDatR21IBS)))
+if(exprColDatR21IBS[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21IBS)
+colnames(df_temp) <- colnames(exprColDatR21IBS)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>35)
+dim(df_temp1)
+# [1] 14879    98
+
+exprColDatR21IBS1 <- exprColDatR21IBS[row.names(exprColDatR21IBS)%in%row.names(df_temp1),]
+dds <- DESeqDataSetFromMatrix (countData = exprColDatR21IBS1, colData = colDatR21IBS, design = ~Lane + Sex)
+dds <- DESeq(dds)
+res <- results(dds, contrast= c("Sex", "2", "1"))
+resfdrIBS <- subset(res, res$padj<0.05); dim(resfdrIBS)
+```
+```{r}
+df_temp <- matrix(NA, ncol=dim(exprColDatR21HC)[2], nrow=dim(exprColDatR21HC)[1])
+for ( i in 1: length(rownames(exprColDatR21HC))){
+  for(j in 1: length(colnames(exprColDatR21HC)))
+if(exprColDatR21HC[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21HC)
+colnames(df_temp) <- colnames(exprColDatR21HC)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>16)
+dim(df_temp1)
+# [1] 14301    37
+
+exprColDatR21HC1 <- exprColDatR21HC[row.names(exprColDatR21HC)%in%row.names(df_temp1),]
+dds <- DESeqDataSetFromMatrix (countData = exprColDatR21HC1, colData = colDatR21HC, design = ~Lane + Sex)
+dds <- DESeq(dds)
+res <- results(dds, contrast= c("Sex", "2", "1"))
+resfdrHC <- subset(res, res$padj<0.05); dim(resfdr)
+```
+
+```{r}
+df_temp <- matrix(NA, ncol=dim(exprColDatR21F)[2], nrow=dim(exprColDatR21F)[1])
+for ( i in 1: length(rownames(exprColDatR21F))){
+  for(j in 1: length(colnames(exprColDatR21F)))
+if(exprColDatR21F[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21F)
+colnames(df_temp) <- colnames(exprColDatR21F)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>20)
+dim(df_temp1)
+# [1] 16209    83
+
+exprColDatR21F1 <- exprColDatR21F[row.names(exprColDatR21F)%in%row.names(df_temp1),]
+dds <- DESeqDataSetFromMatrix (countData = exprColDatR21F1, colData = colDatR21F, design = ~ Lane + Group)
+dds <- DESeq(dds)
+res <- results(dds, contrast= c("Group", "2", "1"))
+resfdr <- subset(res, res$padj<0.1); dim(resfdr)
+```
+
+
+```{r}
+df_temp <- matrix(NA, ncol=dim(exprColDatR21M)[2], nrow=dim(exprColDatR21M)[1])
+for ( i in 1: length(rownames(exprColDatR21M))){
+  for(j in 1: length(colnames(exprColDatR21M)))
+if(exprColDatR21M[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21M)
+colnames(df_temp) <- colnames(exprColDatR21M)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>16)
+dim(df_temp1)
+# [1] 16209    83
+
+exprColDatR21M1 <- exprColDatR21M[row.names(exprColDatR21M)%in%row.names(df_temp1),]
+dds <- DESeqDataSetFromMatrix (countData = exprColDatR21M1, colData = colDatR21M, design = ~ Lane+Group)
+dds <- DESeq(dds)
+res <- results(dds, contrast= c("Group", "2", "1"))
+resfdr <- subset(res, res$padj<0.10); dim(resfdr)
+```
+```{r}
+save(exprColDatR21F,exprColDatR21M,exprColDatR21IBS,exprColDatR21HC,colDatR21F,colDatR21M,colDatR21IBS,colDatR21HC, file ="IBS_sex_interactionR21_data.Rda")
+save(exprColDatR21F1,exprColDatR21M1,colDatR21F,colDatR21M, file ="IBS_sex_interactionR21_data_filtered.Rda")
+```
+
+

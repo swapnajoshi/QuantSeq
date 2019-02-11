@@ -1,0 +1,1542 @@
+---
+title: "QuantSeq_edgeR"
+author: "Swapna Mahurkar-Joshi"
+date: "December 21, 2017"
+output:
+  word_document: default
+  html_document: default
+---
+
+# Libraries
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("rlang")
+# library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(edgeR)
+library(knitr)
+```
+
+#####################################################################
+# IBS - HC  differences
+#####################################################################
+
+# Load raw data matrices
+```{r}
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/colonTissueRNASeqData.Rda")
+colDatR21 <- subset(colDat, colDat$Methylation==1)
+exprColDatR21 <- exprColDat[,colnames(exprColDat)%in%row.names(colDatR21)]
+all.equal(row.names(colDatR21),colnames(exprColDatR21))
+colDatR21$Dx <- ifelse(colDatR21$Group==1,"HC","IBS")
+colDatR21$Dx <- as.factor(colDatR21$Dx)
+colDatR21$Lane <- as.factor(colDatR21$Lane)
+```
+
+# Filter counts based on minimum number of counts (1) in atlesast the number of samples in smallest comparison group.
+```{r}
+df_temp <- matrix(NA, ncol=dim(exprColDatR21)[2], nrow=dim(exprColDatR21)[1])
+for ( i in 1: length(rownames(exprColDatR21))){
+  for(j in 1: length(colnames(exprColDatR21)))
+if(exprColDatR21[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21)
+colnames(df_temp) <- colnames(exprColDatR21)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>36)
+dim(df_temp1)
+# [1] 15872  134
+```
+
+# EdgeR differential expression
+
+```{r}
+exprColDatR21_1 <- exprColDatR21[row.names(exprColDatR21)%in%row.names(df_temp1),]
+y <- DGEList(counts=exprColDatR21_1,group=colDatR21$Dx)
+y$Genes <- mapIds(org.Hs.eg.db, keys=rownames(y), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+# y$Genes <- as.data.frame(y$Genes)
+# colnames(y$Genes) <- "Symbol"
+# y <- y[!is.na(y$Genes),]; dim(y)
+# y$Genes <- y$Genes[!is.na(y$Genes)]
+length(y$Genes)
+y <- calcNormFactors(y)
+```
+
+# PCA plots
+
+```{r}
+
+plot.new()
+pch <- c(0,1)
+colors <- rep(c("darkgreen", "red"), 2)
+plotMDS(y, col=colors[colDatR21$Dx], pch=pch[colDatR21$Dx])
+legend("bottomright", legend=levels(colDatR21$Dx), pch=pch, col=colors, ncol=2)
+
+plotMDS(y, col=colors[colDatR21$Lane], pch=pch[colDatR21$Lane])
+legend("bottomright", legend=levels(colDatR21$Lane), pch=pch, col=colors, ncol=2)
+
+plotMD(y, column=1)
+abline(h=0, col="red", lty=2, lwd=2)
+
+```
+
+# Contrast
+
+```{r}
+design <- model.matrix(~ 0 + colDatR21$Dx + colDatR21$Lane)
+colnames(design) <- c("HC","IBS","Lane") #levels(colDatR21$Dx)
+```
+
+```{r}
+y <- estimateDisp(y,design, robust=TRUE)
+```
+
+```{r}
+plotBCV(y)
+```
+
+# Model variable
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+head(fit$coefficients)
+```
+
+```{r}
+plotQLDisp(fit)
+```
+
+```{r}
+IBS_HC <- makeContrasts(IBS-HC, levels=design)
+```
+
+```{r}
+res <- glmQLFTest(fit, contrast=IBS_HC)
+```
+
+```{r}
+topTags(res)
+```
+
+# Results
+
+```{r}
+# all.equal(row.names(y$Genes),row.names(res$table))
+resultsIBSVsHC <- data.frame(topTags(res,n=dim(res$table)[1]))
+resultsIBSVsHC <- resultsIBSVsHC[row.names(res),]
+y$Genes <- y$Genes[row.names(resultsIBSVsHC )]
+resultsIBSVsHC $Gene_Symbol <- y$Genes
+resultsIBSVsHC <- resultsIBSVsHC[order(resultsIBSVsHC$PValue),]
+save(resultsIBSVsHC , res, y, file = "DE_GroupIBSvsHC_edgeR.Rda")
+
+resultsIBSVsHC_fdr05 <-  subset(resultsIBSVsHC, resultsIBSVsHC$FDR<0.05); dim(resultsIBSVsHC_fdr05)
+resultsIBSVsHC_fdr1 <-  subset(resultsIBSVsHC, resultsIBSVsHC$FDR<0.1); dim(resultsIBSVsHC_fdr1)
+resultsIBSVsHC_005 <-  subset(resultsIBSVsHC, resultsIBSVsHC$PValue<0.005); dim(resultsIBSVsHC_005)
+c(sum(resultsIBSVsHC_005$logFC<0),sum(resultsIBSVsHC_005$logFC>0))
+
+```
+
+# Decision tests
+
+```{r}
+# is.de <- decideTestsDGE(res)
+is.de <- ifelse(res$table$PValue<0.005 & res$table$logFC > 0,1,ifelse(res$table$PValue<0.005 & res$table$logFC < 0,-1,0))
+# summary(is.de)
+```
+
+# plot DE genes
+
+```{r}
+plotMD(res, status=is.de, values=c(1,-1), col=c("red","blue"),
+       legend="topright")
+```
+
+# Gene Ontology annotations
+
+```{r}
+
+resultsIBSVsHC_sigAn <- subset(resultsIBSVsHC_005, resultsIBSVsHC_005$Gene_Symbol!=" "); dim(resultsIBSVsHC_sigAn)
+resultsIBSVsHC_sigAn$geneID <-  select(org.Hs.eg.db, resultsIBSVsHC_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")[which(!duplicated(select(org.Hs.eg.db, resultsIBSVsHC_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")$ALIAS)),]$ENTREZID
+go <- goana(de =resultsIBSVsHC_sigAn$geneID, species="Hs")
+topGO(go, n=15)
+kg <- kegga(de =resultsIBSVsHC_sigAn$geneID, species="Hs")
+kg <-  kg[order(kg$P.DE),]
+```
+
+```{r}
+# kable(resultsIBSVsHC_sig)
+kable(subset(go, go$P.DE <0.00005))
+kable(subset(kg, kg$P.DE <0.05))
+```
+
+# IBS-D vs HC
+
+```{r}
+colDatR21DN <- subset(colDatR21, colDatR21$BH_Colon_Exam=="D"| colDatR21$BH_Colon_Exam=="N")
+colDatR21DN$BH_Colon_Exam <- factor(colDatR21DN$BH_Colon_Exam)
+
+exprColDatR21DN <- exprColDatR21[, colnames(exprColDatR21)%in%row.names(colDatR21DN)]
+all.equal(row.names(colDatR21DN), colnames(exprColDatR21DN))
+
+df_temp <- matrix(NA, ncol=dim(exprColDatR21DN)[2], nrow=dim(exprColDatR21DN)[1])
+for ( i in 1: length(rownames(exprColDatR21DN))){
+  for(j in 1: length(colnames(exprColDatR21DN)))
+if(exprColDatR21DN[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21DN)
+colnames(df_temp) <- colnames(exprColDatR21DN)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>35)
+dim(df_temp1)
+# [1] 13899    38
+```
+
+# EdgeR differential expression
+
+```{r}
+exprColDatR21DN1 <- exprColDatR21DN[row.names(exprColDatR21DN)%in%row.names(df_temp1),]
+y <- DGEList(counts=exprColDatR21DN1,group=colDatR21DN$BH_Colon_Exam)
+y$Genes <- mapIds(org.Hs.eg.db, keys=rownames(y), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+# y$Genes <- as.data.frame(y$Genes)
+# colnames(y$Genes) <- "Symbol"
+# y <- y[!is.na(y$Genes),]; dim(y)
+# y$Genes <- y$Genes[!is.na(y$Genes)]
+length(y$Genes)
+y <- calcNormFactors(y)
+
+```
+
+# PCA plots
+
+```{r}
+pch <- c(0,1)
+colors <- rep(c("darkgreen", "red"), 2)
+plotMDS(y, col=colors[colDatR21DN$BH_Colon_Exam], pch=pch[colDatR21DN$BH_Colon_Exam])
+legend("bottomright", legend=levels(colDatR21DN$BH_Colon_Exam), pch=pch, col=colors, ncol=2)
+
+plotMDS(y, col=colors[colDatR21DN$Lane], pch=pch[colDatR21DN$Lane])
+legend("bottomright", legend=levels(colDatR21DN$Lane), pch=pch, col=colors, ncol=2)
+
+plotMD(y, column=1)
+abline(h=0, col="red", lty=2, lwd=2)
+```
+
+# Contrast
+
+```{r}
+
+design <- model.matrix(~0+colDatR21DN$BH_Colon_Exam + colDatR21DN$Lane )
+colnames(design) <- c("D","N","Lane") #levels(colDatR21DF$BH_Colon_Exam)
+```
+
+```{r}
+y <- estimateDisp(y,design, robust=TRUE)
+```
+
+```{r}
+plotBCV(y)
+```
+
+# Model variable
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+head(fit$coefficients)
+```
+```{r}
+plotQLDisp(fit)
+```
+
+```{r}
+D_N <- makeContrasts(D-N, levels=design)
+```
+
+```{r}
+res <- glmQLFTest(fit, contrast=D_N)
+```
+
+```{r}
+topTags(res)
+```
+
+# Results
+```{r}
+# all.equal(row.names(y$Genes),row.names(res$table))
+results_DVsN <- data.frame(topTags(res,n=dim(res$table)[1]))
+results_DVsN <- results_DVsN[row.names(res),]
+y$Genes <- y$Genes[row.names(results_DVsN)]
+results_DVsN$Gene_Symbol <- y$Genes
+results_DVsN <- results_DVsN[order(results_DVsN$PValue),]
+save(results_DVsN, res, y, file = "DE_DN_edgeR.Rda")
+
+results_DVsN_fdr05 <-  subset(results_DVsN, results_DVsN$FDR<0.05); dim(results_DVsN_fdr05)
+results_DVsN_fdr1 <-  subset(results_DVsN, results_DVsN$FDR<0.1); dim(results_DVsN_fdr1)
+results_DVsN_005  <-  subset(results_DVsN, results_DVsN$PValue<0.005); dim(results_DVsN_005)
+c(sum(results_DVsN_005$logFC<0),sum(results_DVsN_005$logFC>0))
+
+```
+# Decision tests
+
+```{r}
+# is.de <- decideTestsDGE(res)
+is.de <- ifelse(res$table$PValue<0.005 & res$table$logFC > 0,1,ifelse(res$table$PValue<0.005 & res$table$logFC < 0,-1,0))
+# summary(is.de)
+```
+
+# plot DE genes
+
+```{r}
+plotMD(res, status=is.de, values=c(1,-1), col=c("red","blue"),
+       legend="topright")
+```
+
+# Gene Ontology annotations
+
+```{r}
+results_DVsN_sig <- subset(results_DVsN, results_DVsN$PValue <0.005); dim(results_DVsN_sig)
+# row.names(results_DVsN_sig) <- results_DVsN_sig$Gene_Symbol
+results_DVsN_sigAn <- subset(results_DVsN_sig, results_DVsN_sig$Gene_Symbol!=" "); dim(results_DVsN_sigAn)
+results_DVsN_sigAn$geneID <-  select(org.Hs.eg.db, results_DVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")[which(!duplicated(select(org.Hs.eg.db, results_DVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")$ALIAS)),]$ENTREZID
+go <- goana(de = results_DVsN_sigAn$geneID, species="Hs")
+topGO(go, n=15)
+kg <- kegga(de = results_DVsN_sigAn$geneID, species="Hs")
+kg <-  kg[order(kg$P.DE),]
+```
+
+```{r}
+# kable(resultsIBSVsHC_sig)
+kable(subset(go, go$P.DE <0.0005))
+kable(subset(kg, kg$P.DE <0.05))
+subset(kg, kg$P.DE <0.05)
+```
+
+
+# IBS-C vs HC
+
+```{r}
+colDatR21CN <- subset(colDatR21, colDatR21$BH_Colon_Exam=="C"| colDatR21$BH_Colon_Exam=="N")
+colDatR21CN$BH_Colon_Exam <- factor(colDatR21CN$BH_Colon_Exam)
+
+exprColDatR21CN <- exprColDatR21[, colnames(exprColDatR21)%in%row.names(colDatR21CN)]
+all.equal(row.names(colDatR21CN), colnames(exprColDatR21CN))
+
+df_temp <- matrix(NA, ncol=dim(exprColDatR21CN)[2], nrow=dim(exprColDatR21CN)[1])
+for ( i in 1: length(rownames(exprColDatR21CN))){
+  for(j in 1: length(colnames(exprColDatR21CN)))
+if(exprColDatR21CN[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21CN)
+colnames(df_temp) <- colnames(exprColDatR21CN)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>31)
+dim(df_temp1)
+# [1]14230    68
+```
+
+# EdgeR differential expression
+
+```{r}
+exprColDatR21CN1 <- exprColDatR21CN[row.names(exprColDatR21CN)%in%row.names(df_temp1),]
+y <- DGEList(counts=exprColDatR21CN1,group=colDatR21CN$BH_Colon_Exam)
+y$Genes <- mapIds(org.Hs.eg.db, keys=rownames(y), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+# y$Genes <- as.data.frame(y$Genes)
+# colnames(y$Genes) <- "Symbol"
+# y <- y[!is.na(y$Genes),]; dim(y)
+# y$Genes <- y$Genes[!is.na(y$Genes)]
+length(y$Genes)
+y <- calcNormFactors(y)
+
+```
+
+# PCA plots
+
+```{r}
+pch <- c(0,1)
+colors <- rep(c("darkgreen", "red"), 2)
+plotMDS(y, col=colors[colDatR21CN$BH_Colon_Exam], pch=pch[colDatR21CN$BH_Colon_Exam])
+legend("bottomright", legend=levels(colDatR21CN$BH_Colon_Exam), pch=pch, col=colors, ncol=2)
+
+plotMDS(y, col=colors[colDatR21CN$Lane], pch=pch[colDatR21CN$Lane])
+legend("bottomright", legend=levels(colDatR21CN$Lane), pch=pch, col=colors, ncol=2)
+
+plotMD(y, column=1)
+abline(h=0, col="red", lty=2, lwd=2)
+```
+
+# Contrast
+
+```{r}
+
+design <- model.matrix(~0+colDatR21CN$BH_Colon_Exam + colDatR21CN$Lane )
+colnames(design) <- c("C","N","Lane") #levels(colDatR21DF$BH_Colon_Exam)
+```
+
+```{r}
+y <- estimateDisp(y,design, robust=TRUE)
+```
+
+```{r}
+plotBCV(y)
+```
+
+# Model variable
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+head(fit$coefficients)
+```
+```{r}
+plotQLDisp(fit)
+```
+
+```{r}
+C_N <- makeContrasts(C-N, levels=design)
+```
+
+```{r}
+res <- glmQLFTest(fit, contrast=C_N)
+```
+
+```{r}
+topTags(res)
+```
+
+# Results
+```{r}
+# all.equal(row.names(y$Genes),row.names(res$table))
+results_CVsN <- data.frame(topTags(res,n=dim(res$table)[1]))
+results_CVsN <- results_CVsN[row.names(res),]
+y$Genes <- y$Genes[row.names(results_CVsN)]
+results_CVsN$Gene_Symbol <- y$Genes
+results_CVsN <- results_CVsN[order(results_CVsN$PValue),]
+save(results_CVsN, res, y, file = "DE_CN_edgeR.Rda")
+
+results_CVsN_fdr05 <-  subset(results_CVsN, results_CVsN$FDR<0.05); dim(results_CVsN_fdr05)
+results_CVsN_fdr1 <-  subset(results_CVsN, results_CVsN$FDR<0.1); dim(results_CVsN_fdr1)
+results_CVsN_005  <-  subset(results_CVsN, results_CVsN$PValue<0.005); dim(results_CVsN_005)
+c(sum(results_CVsN_005$logFC<0),sum(results_CVsN_005$logFC>0))
+
+```
+# Decision tests
+
+```{r}
+# is.de <- decideTestsDGE(res)
+is.de <- ifelse(res$table$PValue<0.005 & res$table$logFC > 0,1,ifelse(res$table$PValue<0.005 & res$table$logFC < 0,-1,0))
+# summary(is.de)
+```
+
+# plot DE genes
+
+```{r}
+plotMD(res, status=is.de, values=c(1,-1), col=c("red","blue"),
+       legend="topright")
+```
+
+# Gene Ontology annotations
+
+```{r}
+results_CVsN_sig <- subset(results_CVsN, results_CVsN$PValue <0.005); dim(results_CVsN_sig)
+# row.names(results_CVsN_sig) <- results_CVsN_sig$Gene_Symbol
+
+results_CVsN_sigAn <- subset(results_CVsN_sig, results_CVsN_sig$Gene_Symbol!=" "); dim(results_CVsN_sigAn)
+results_CVsN_sigAn$geneID <-  select(org.Hs.eg.db, results_CVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")[which(!duplicated(select(org.Hs.eg.db, results_CVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")$ALIAS)),]$ENTREZID
+go <- goana(de = results_CVsN_sigAn$geneID, species="Hs")
+kg <- kegga(de = results_CVsN_sigAn$geneID, species="Hs")
+kg <-  kg[order(kg$P.DE),]
+```
+
+```{r}
+kable(subset(go, go$P.DE <0.0005))
+kable(subset(kg, kg$P.DE <0.05))
+subset(kg, kg$P.DE <0.05)
+```
+
+#######################################
+# IBS HC differences within Women
+########################################
+
+## Load data and filter out low counts (atleast one count in n of smallest group)
+```{r}
+load("IBS_sex_interactionR21_data.Rda")
+```
+
+# IBS-D vs HC within women
+
+```{r}
+colDatR21DF <- subset(colDatR21F, colDatR21F$BH_Colon_Exam=="D"|colDatR21F$BH_Colon_Exam=="N"); dim(colDatR21DF)
+exprColDatR21DF <- exprColDatR21F[, colnames(exprColDatR21F)%in%row.names(colDatR21DF)]; dim(exprColDatR21DF)
+colDatR21DF$BH_Colon_Exam <- factor(colDatR21DF$BH_Colon_Exam)
+all.equal(row.names(colDatR21DF), colnames(exprColDatR21DF))
+df_temp <- matrix(NA, ncol=dim(exprColDatR21DF)[2], nrow=dim(exprColDatR21DF)[1])
+for ( i in 1: length(rownames(exprColDatR21DF))){
+  for(j in 1: length(colnames(exprColDatR21DF)))
+if(exprColDatR21DF[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21DF)
+colnames(df_temp) <- colnames(exprColDatR21DF)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>20)
+dim(df_temp1)
+# [1] 13520    38
+```
+
+# EdgeR differential expression
+
+```{r}
+exprColDatR21DF1 <- exprColDatR21DF[row.names(exprColDatR21DF)%in%row.names(df_temp1),]
+y <- DGEList(counts=exprColDatR21DF,group=colDatR21DF$BH_Colon_Exam,lib.size = colSums(exprColDatR21DF), norm.factors = rep(1,ncol(exprColDatR21DF)))
+y$Genes <- mapIds(org.Hs.eg.db, keys=rownames(y), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+# y$Genes <- as.data.frame(y$Genes)
+# colnames(y$Genes) <- "Symbol"
+# y <- y[!is.na(y$Genes),]; dim(y)
+# y$Genes <- y$Genes[!is.na(y$Genes)]
+length(y$Genes)
+y <- calcNormFactors(y)
+
+```
+
+# PCA plots
+
+```{r}
+pch <- c(0,1)
+colors <- rep(c("darkgreen", "red"), 2)
+plotMDS(y, col=colors[colDatR21DF$BH_Colon_Exam], pch=pch[colDatR21DF$BH_Colon_Exam])
+legend("bottomright", legend=levels(colDatR21DF$BH_Colon_Exam), pch=pch, col=colors, ncol=2)
+
+plotMDS(y, col=colors[colDatR21DF$Lane], pch=pch[colDatR21DF$Lane])
+legend("bottomright", legend=levels(colDatR21DF$Lane), pch=pch, col=colors, ncol=2)
+
+plotMD(y, column=1)
+abline(h=0, col="red", lty=2, lwd=2)
+```
+
+# Contrast
+
+```{r}
+
+design <- model.matrix(~0+colDatR21DF$BH_Colon_Exam + colDatR21DF$Lane )
+colnames(design) <- c("N","D","Lane") #levels(colDatR21DF$BH_Colon_Exam)
+```
+
+```{r}
+y <- estimateDisp(y,design, robust=TRUE)
+```
+
+```{r}
+plotBCV(y)
+```
+
+# Model variable
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+head(fit$coefficients)
+```
+```{r}
+plotQLDisp(fit)
+```
+
+```{r}
+D_N <- makeContrasts(D-N, levels=design)
+```
+
+```{r}
+res <- glmQLFTest(fit, contrast=D_N)
+```
+
+```{r}
+topTags(res)
+```
+
+# Results
+```{r}
+# all.equal(row.names(y$Genes),row.names(res$table))
+resultsF_DVsN <- data.frame(topTags(res,n=dim(res$table)[1]))
+resultsF_DVsN <- resultsF_DVsN[row.names(res),]
+y$Genes <- y$Genes[row.names(resultsF_DVsN)]
+resultsF_DVsN$Gene_Symbol <- y$Genes
+resultsF_DVsN <- resultsF_DVsN[order(resultsF_DVsN$PValue),]
+save(resultsF_DVsN, res, y, file = "DE_F_DNc_edgeR.Rda")
+
+resultsF_DVsN_fdr05 <-  subset(resultsF_DVsN, resultsF_DVsN$FDR<0.05); dim(resultsF_DVsN_fdr05)
+resultsF_DVsN_fdr1 <-  subset(resultsF_DVsN, resultsF_DVsN$FDR<0.1); dim(resultsF_DVsN_fdr1)
+resultsF_DVsN_005  <-  subset(resultsF_DVsN, resultsF_DVsN$PValue<0.005); dim(resultsF_DVsN_005)
+c(sum(resultsF_DVsN_005$logFC<0),sum(resultsF_DVsN_005$logFC>0))
+
+```
+
+# Decision tests
+
+```{r}
+# is.de <- decideTestsDGE(res)
+is.de <- ifelse(res$table$PValue<0.005 & res$table$logFC > 0,1,ifelse(res$table$PValue<0.005 & res$table$logFC < 0,-1,0))
+# summary(is.de)
+```
+
+# plot DE genes
+
+```{r}
+plotMD(res, status=is.de, values=c(1,-1), col=c("red","blue"),
+       legend="topright")
+```
+
+# Gene Ontology annotations
+
+```{r}
+resultsF_DVsN_sig <- subset(resultsF_DVsN, resultsF_DVsN$PValue <0.005); dim(resultsF_DVsN_sig)
+# row.names(resultsIBSVsHC_sig) <- resultsIBSVsHC_sig$Gene_Symbol
+resultsF_DVsN_sigAn <- subset(resultsF_DVsN_sig, resultsF_DVsN_sig$Gene_Symbol!=" "); dim(resultsF_DVsN_sigAn)
+resultsF_DVsN_sigAn$geneID <-  select(org.Hs.eg.db, resultsF_DVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")[which(!duplicated(select(org.Hs.eg.db, resultsF_DVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")$ALIAS)),]$ENTREZID
+go <- goana(de =resultsF_DVsN_sigAn$geneID, species="Hs")
+# topGO(go, n=15)
+kg <- kegga(de =resultsF_DVsN_sigAn$geneID, species="Hs")
+kg <-  kg[order(kg$P.DE),]
+```
+
+```{r}
+kable(subset(go, go$P.DE <0.0005))
+kable(subset(kg, kg$P.DE <0.05))
+subset(kg, kg$P.DE <0.05)
+```
+
+
+##############################################
+# IBS-D HC differences within Men
+##############################################
+
+## Load data and filter out low counts (atleast one count in n of smallest group)
+
+```{r}
+colDatR21DM <- subset(colDatR21M, colDatR21M$BH_Colon_Exam=="D"|colDatR21M$BH_Colon_Exam=="N"); dim(colDatR21DM)
+exprColDatR21DM <- exprColDatR21M[, colnames(exprColDatR21M)%in%row.names(colDatR21DM)]; dim(exprColDatR21DM)
+colDatR21DM$BH_Colon_Exam <- factor(colDatR21DM$BH_Colon_Exam)
+all.equal(row.names(colDatR21DM), colnames(exprColDatR21DM))
+df_temp <- matrix(NA, ncol=dim(exprColDatR21DM)[2], nrow=dim(exprColDatR21DM)[1])
+for ( i in 1: length(rownames(exprColDatR21DM))){
+  for(j in 1: length(colnames(exprColDatR21DM)))
+if(exprColDatR21DM[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21DM)
+colnames(df_temp) <- colnames(exprColDatR21DM)
+df_temp$sum1 <- rowSums(df_temp)
+table(colDatR21DM$Group)
+df_temp1<- subset(df_temp, df_temp$sum1>16)
+dim(df_temp1)
+# [1] 13926    52
+```
+
+# EdgeR differential expression
+
+```{r}
+exprColDatR21DM1 <- exprColDatR21DM[row.names(exprColDatR21DM)%in%row.names(df_temp1),]
+y <- DGEList(counts=exprColDatR21DM,group=colDatR21DM$BH_Colon_Exam,lib.size = colSums(exprColDatR21DM), norm.factors = rep(1,ncol(exprColDatR21DM)))
+y$Genes <- mapIds(org.Hs.eg.db, keys=rownames(y), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+# y$Genes <- as.data.frame(y$Genes)
+# colnames(y$Genes) <- "Symbol"
+# y <- y[!is.na(y$Genes),]; dim(y)
+# y$Genes <- y$Genes[!is.na(y$Genes)]
+length(y$Genes)
+y <- calcNormFactors(y)
+```
+
+```{r}
+pch <- c(0,1)
+colors <- rep(c("darkgreen", "red"), 2)
+plotMDS(y, col=colors[colDatR21DM$BH_Colon_Exam], pch=pch[colDatR21DM$BH_Colon_Exam])
+legend("bottomleft", legend=levels(colDatR21DM$BH_Colon_Exam), pch=pch, col=colors, ncol=2)
+
+plotMD(y, column=1)
+abline(h=0, col="red", lty=2, lwd=2)
+```
+
+# Contrasts
+
+```{r}
+design <- model.matrix(~0+colDatR21DM$BH_Colon_Exam)
+colnames(design) <- c("N","D") #levels(colDatR21DM$BH_Colon_Exam)
+```
+
+```{r}
+y <- estimateDisp(y,design, robust=TRUE)
+```
+
+```{r}
+plotBCV(y)
+```
+
+# Model the variable 
+
+```{r}
+fit <- glmQLFit(y, design, robust=FALSE)
+head(fit$coefficients)
+```
+
+```{r}
+plotQLDisp(fit)
+```
+
+```{r}
+D_N <- makeContrasts(D-N, levels=design)
+```
+
+# Results 
+
+```{r}
+res <- glmQLFTest(fit, contrast=D_N)
+```
+
+```{r}
+topTags(res)
+```
+
+```{r}
+# all.equal(row.names(y$Genes),row.names(res$table))
+resultsM_DVsN <- data.frame(topTags(res,n=dim(res$table)[1]))
+resultsM_DVsN <- resultsM_DVsN[row.names(res),]
+y$Genes <- y$Genes[row.names(resultsM_DVsN)]
+resultsM_DVsN$Gene_Symbol <- y$Genes
+resultsM_DVsN <- resultsM_DVsN[order(resultsM_DVsN$PValue),]
+save(resultsM_DVsN, res, y, file = "DE_M_DN_edgeR.Rda")
+
+resultsM_DVsN_fdr05 <-  subset(resultsM_DVsN, resultsM_DVsN$FDR<0.05); dim(resultsM_DVsN_fdr05)
+resultsM_DVsN_fdr1 <-  subset(resultsM_DVsN, resultsM_DVsN$FDR<0.1); dim(resultsM_DVsN_fdr1)
+resultsM_DVsN_005  <-  subset(resultsM_DVsN, resultsM_DVsN$PValue<0.005); dim(resultsM_DVsN_005)
+c(sum(resultsM_DVsN_005$logFC<0),sum(resultsM_DVsN_005$logFC>0))
+```
+# Decision tests
+
+```{r}
+# is.de <- decideTestsDGE(res)
+is.de <- ifelse(res$table$PValue<0.005 & res$table$logFC > 0,1,ifelse(res$table$PValue<0.005 & res$table$logFC < 0,-1,0))
+# summary(is.de)
+```
+
+# plot DE genes
+
+```{r}
+plotMD(res, status=is.de, values=c(1,-1), col=c("red","blue"),
+       legend="topright")
+```
+
+# Gene Ontology annotations
+
+```{r}
+resultsM_DVsN_sig <- subset(resultsM_DVsN, resultsM_DVsN$PValue <0.005); dim(resultsM_DVsN_sig)
+# row.names(resultsIBSVsHC_sig) <- resultsIBSVsHC_sig$Gene_Symbol
+resultsM_DVsN_sigAn <- subset(resultsM_DVsN_sig, resultsM_DVsN_sig$Gene_Symbol!=" "); dim(resultsM_DVsN_sigAn)
+resultsM_DVsN_sigAn$geneID <-  select(org.Hs.eg.db, resultsM_DVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")[which(!duplicated(select(org.Hs.eg.db, resultsM_DVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")$ALIAS)),]$ENTREZID
+go <- goana(de =resultsM_DVsN_sigAn$geneID, species="Hs")
+topGO(go, n=15)
+kg <- kegga(de =resultsM_DVsN_sigAn$geneID, species="Hs")
+kg <-  kg[order(kg$P.DE),]
+```
+
+```{r}
+kable(subset(go, go$P.DE <0.00005))
+kable(subset(kg, kg$P.DE <0.05))
+subset(kg, kg$P.DE <0.05)
+```
+
+############################################
+# IBS-C vs HC
+############################################
+
+# IBS-C vs HC within women
+
+```{r}
+colDatR21CF <- subset(colDatR21F, colDatR21F$BH_Colon_Exam=="C"|colDatR21F$BH_Colon_Exam=="N"); dim(colDatR21CF)
+exprColDatR21CF <- exprColDatR21F[, colnames(exprColDatR21F)%in%row.names(colDatR21CF)]; dim(exprColDatR21CF)
+colDatR21CF$BH_Colon_Exam <- factor(colDatR21CF$BH_Colon_Exam)
+all.equal(row.names(colDatR21CF), colnames(exprColDatR21CF))
+df_temp <- matrix(NA, ncol=dim(exprColDatR21CF)[2], nrow=dim(exprColDatR21CF)[1])
+for ( i in 1: length(rownames(exprColDatR21CF))){
+  for(j in 1: length(colnames(exprColDatR21CF)))
+if(exprColDatR21CF[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21CF)
+colnames(df_temp) <- colnames(exprColDatR21CF)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>20)
+dim(df_temp1)
+# [1] 14228  44
+```
+
+# EdgeR differential expression
+
+```{r}
+exprColDatR21CF1 <- exprColDatR21CF[row.names(exprColDatR21CF)%in%row.names(df_temp1),]
+y <- DGEList(counts=exprColDatR21CF1,group=colDatR21CF$BH_Colon_Exam)
+y$Genes <- mapIds(org.Hs.eg.db, keys=rownames(y), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+# y$Genes <- as.data.frame(y$Genes)
+# colnames(y$Genes) <- "Symbol"
+# y <- y[!is.na(y$Genes),]; dim(y)
+# y$Genes <- y$Genes[!is.na(y$Genes)]
+length(y$Genes)
+y <- calcNormFactors(y)
+
+```
+
+# PCA plots
+
+```{r}
+pch <- c(0,1)
+colors <- rep(c("darkgreen", "red"), 2)
+plotMDS(y, col=colors[colDatR21CF$BH_Colon_Exam], pch=pch[colDatR21CF$BH_Colon_Exam])
+legend("bottomleft", legend=levels(colDatR21CF$BH_Colon_Exam), pch=pch, col=colors, ncol=2)
+
+plotMD(y, column=1)
+abline(h=0, col="red", lty=2, lwd=2)
+```
+
+# Contrast
+
+```{r}
+design <- model.matrix(~0+colDatR21CF$BH_Colon_Exam)
+colnames(design) <- c("N","C") #levels(colDatR21CF$BH_Colon_Exam)
+```
+
+```{r}
+y <- estimateDisp(y,design, robust=TRUE)
+```
+
+```{r}
+plotBCV(y)
+```
+
+# Model variable
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+head(fit$coefficients)
+```
+
+```{r}
+plotQLDisp(fit)
+```
+
+```{r}
+C_N <- makeContrasts(C-N, levels=design)
+```
+
+```{r}
+res <- glmQLFTest(fit, contrast=C_N)
+```
+
+```{r}
+topTags(res)
+```
+
+# Results
+
+```{r}
+# all.equal(row.names(y$Genes),row.names(res$table))
+resultsF_CVsN <- data.frame(topTags(res,n=dim(res$table)[1]))
+resultsF_CVsN <- resultsF_CVsN[row.names(res),]
+y$Genes <- y$Genes[row.names(resultsF_CVsN)]
+resultsF_CVsN$Gene_Symbol <- y$Genes
+resultsF_CVsN <- resultsF_CVsN[order(resultsF_CVsN$PValue),]
+save(resultsF_CVsN, res, y, file = "DE_F_CN_edgeR.Rda")
+
+resultsF_CVsN_fdr05 <-  subset(resultsF_CVsN, resultsF_CVsN$FDR<0.05); dim(resultsF_CVsN_fdr05)
+resultsF_CVsN_fdr1 <-  subset(resultsF_CVsN, resultsF_CVsN$FDR<0.1); dim(resultsF_CVsN_fdr1)
+resultsF_CVsN_005  <-  subset(resultsF_CVsN, resultsF_CVsN$PValue<0.005); dim(resultsF_CVsN_005)
+c(sum(resultsF_CVsN_005$logFC<0),sum(resultsF_CVsN_005$logFC>0))
+
+```
+
+# Decision tests
+
+```{r}
+# is.de <- decideTestsDGE(res)
+is.de <- ifelse(res$table$PValue<0.005 & res$table$logFC > 0,1,ifelse(res$table$PValue<0.005 & res$table$logFC < 0,-1,0))
+# summary(is.de)
+```
+
+# plot DE genes
+
+```{r}
+plotMD(res, status=is.de, values=c(1,-1), col=c("red","blue"),
+       legend="topright")
+```
+
+# Gene Ontology annotations
+
+```{r}
+resultsF_CVsN_sig <- subset(resultsF_CVsN, resultsF_CVsN$PValue <0.005); dim(resultsF_CVsN_sig)
+# row.names(resultsIBSVsHC_sig) <- resultsIBSVsHC_sig$Gene_Symbol
+resultsF_CVsN_sigAn <- subset(resultsF_CVsN_sig, resultsF_CVsN_sig$Gene_Symbol!=" "); dim(resultsF_CVsN_sigAn)
+resultsF_CVsN_sigAn$geneID <-  select(org.Hs.eg.db, resultsF_CVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")[which(!duplicated(select(org.Hs.eg.db, resultsF_CVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")$ALIAS)),]$ENTREZID
+go <- goana(de =resultsF_CVsN_sigAn$geneID, species="Hs")
+# topGO(go, n=15)
+kg <- kegga(de =resultsF_CVsN_sigAn$geneID, species="Hs")
+kg <-  kg[order(kg$P.DE),]
+```
+
+```{r}
+kable(subset(go, go$P.DE <0.0005))
+kable(subset(kg, kg$P.DE <0.05))
+subset(kg, kg$P.DE <0.05)
+```
+
+
+##############################################
+# IBS-C HC differences within Men
+##############################################
+
+## Load data and filter out low counts (atleast one count in n of smallest group)
+
+```{r}
+colDatR21CM <- subset(colDatR21M, colDatR21M$BH_Colon_Exam=="C"|colDatR21M$BH_Colon_Exam=="N"); dim(colDatR21CM)
+exprColDatR21CM <- exprColDatR21M[, colnames(exprColDatR21M)%in%row.names(colDatR21CM)]; dim(exprColDatR21CM)
+colDatR21CM$BH_Colon_Exam <- factor(colDatR21CM$BH_Colon_Exam)
+all.equal(row.names(colDatR21CM), colnames(exprColDatR21CM))
+df_temp <- matrix(NA, ncol=dim(exprColDatR21CM)[2], nrow=dim(exprColDatR21CM)[1])
+for ( i in 1: length(rownames(exprColDatR21CM))){
+  for(j in 1: length(colnames(exprColDatR21CM)))
+if(exprColDatR21CM[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21CM)
+colnames(df_temp) <- colnames(exprColDatR21CM)
+df_temp$sum1 <- rowSums(df_temp)
+table(colDatR21CM$Group)
+df_temp1<- subset(df_temp, df_temp$sum1>20)
+dim(df_temp1)
+# [1] 10159    52
+```
+
+# EdgeR differential expression
+
+```{r}
+exprColDatR21CM1 <- exprColDatR21CM[row.names(exprColDatR21CM)%in%row.names(df_temp1),]
+y <- DGEList(counts=exprColDatR21CM1,group=colDatR21CM$BH_Colon_Exam)
+y$Genes <- mapIds(org.Hs.eg.db, keys=rownames(y), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+# y$Genes <- as.data.frame(y$Genes)
+# colnames(y$Genes) <- "Symbol"
+# y <- y[!is.na(y$Genes),]; dim(y)
+# y$Genes <- y$Genes[!is.na(y$Genes)]
+length(y$Genes)
+y <- calcNormFactors(y)
+```
+
+```{r}
+pch <- c(0,1)
+colors <- rep(c("darkgreen", "red"), 2)
+plotMDS(y, col=colors[colDatR21CM$BH_Colon_Exam], pch=pch[colDatR21CM$BH_Colon_Exam])
+legend("bottomleft", legend=levels(colDatR21CM$BH_Colon_Exam), pch=pch, col=colors, ncol=2)
+
+plotMD(y, column=1)
+abline(h=0, col="red", lty=2, lwd=2)
+```
+
+# Contrasts
+
+```{r}
+design <- model.matrix(~0+colDatR21CM$BH_Colon_Exam)
+colnames(design) <- c("N","C") #levels(colDatR21CM$BH_Colon_Exam)
+```
+
+```{r}
+y <- estimateDisp(y,design, robust=TRUE)
+```
+
+```{r}
+plotBCV(y)
+```
+
+# Model the variable 
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+head(fit$coefficients)
+```
+
+```{r}
+plotQLDisp(fit)
+```
+
+```{r}
+C_N <- makeContrasts(C-N, levels=design)
+```
+
+# Results 
+
+```{r}
+res <- glmQLFTest(fit, contrast=C_N)
+```
+
+```{r}
+topTags(res)
+```
+
+```{r}
+# all.equal(row.names(y$Genes),row.names(res$table))
+resultsM_CVsN <- data.frame(topTags(res,n=dim(res$table)[1]))
+resultsM_CVsN <- resultsM_CVsN[row.names(res),]
+y$Genes <- y$Genes[row.names(resultsM_CVsN)]
+resultsM_CVsN$Gene_Symbol <- y$Genes
+
+save(resultsM_CVsN, res, y, file = "DE_M_CN_edgeR.Rda")
+
+resultsM_CVsN_fdr05 <-  subset(resultsM_CVsN, resultsM_CVsN$FDR<0.05); dim(resultsM_CVsN_fdr05)
+resultsM_CVsN_fdr1 <-  subset(resultsM_CVsN, resultsM_CVsN$FDR<0.1); dim(resultsM_CVsN_fdr1)
+resultsM_CVsN_005  <-  subset(resultsM_CVsN, resultsM_CVsN$PValue<0.005); dim(resultsM_CVsN_005)
+c(sum(resultsM_CVsN_005$logFC<0),sum(resultsM_CVsN_005$logFC>0))
+```
+
+# Decision tests
+
+```{r}
+# is.de <- decideTestsDGE(res)
+is.de <- ifelse(res$table$PValue<0.005 & res$table$logFC > 0,1,ifelse(res$table$PValue<0.005 & res$table$logFC < 0,-1,0))
+# summary(is.de)
+```
+
+# plot DE genes
+
+```{r}
+plotMD(res, status=is.de, values=c(1,-1), col=c("red","blue"),
+       legend="topright")
+```
+
+# Gene Ontology annotations
+
+```{r}
+resultsM_CVsN_sig <- subset(resultsM_CVsN, resultsM_CVsN$PValue <0.005); dim(resultsM_CVsN_sig)
+# row.names(resultsIBSVsHC_sig) <- resultsIBSVsHC_sig$Gene_Symbol
+resultsM_CVsN_sigAn <- subset(resultsM_CVsN_sig, resultsM_CVsN_sig$Gene_Symbol!=" "); dim(resultsM_CVsN_sigAn)
+resultsM_CVsN_sigAn$geneID <-  select(org.Hs.eg.db, resultsM_CVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")[which(!duplicated(select(org.Hs.eg.db, resultsM_CVsN_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")$ALIAS)),]$ENTREZID
+go <- goana(de =resultsM_CVsN_sigAn$geneID, species="Hs")
+topGO(go, n=15)
+kg <- kegga(de =resultsM_CVsN_sigAn$geneID, species="Hs")
+kg <-  kg[order(kg$P.DE),]
+```
+
+```{r}
+kable(subset(go, go$P.DE <0.0005))
+kable(subset(kg, kg$P.DE <0.05))
+subset(kg, kg$P.DE <0.05)
+```
+
+#####################################################################
+# Female-male differences 
+#####################################################################
+
+```{r}
+colDatR21$Sex <- as.factor(colDatR21$Sex)
+```
+
+```{r}
+df_temp <- matrix(NA, ncol=dim(exprColDatR21)[2], nrow=dim(exprColDatR21)[1])
+for ( i in 1: length(rownames(exprColDatR21))){
+  for(j in 1: length(colnames(exprColDatR21)))
+if(exprColDatR21[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21)
+colnames(df_temp) <- colnames(exprColDatR21)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>51)
+dim(df_temp1)
+# [1] 14727  134
+```
+
+# EdgeR differential expression
+
+```{r}
+exprColDatR21_1 <- exprColDatR21[row.names(exprColDatR21)%in%row.names(df_temp1),]
+y <- DGEList(counts=exprColDatR21_1,group=colDatR21$Sex)
+y$Genes <- mapIds(org.Hs.eg.db, keys=rownames(y), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+length(y$Genes)
+y <- calcNormFactors(y)
+
+```
+
+# PCA plots
+
+```{r}
+pch <- c(0,1)
+colors <- rep(c("darkgreen", "red"), 2)
+plotMDS(y, col=colors[colDatR21$Sex], pch=pch[colDatR21$Sex])
+legend("topright", legend=levels(colDatR21$Sex), pch=pch, col=colors, ncol=2)
+
+plotMD(y, column=1)
+abline(h=0, col="red", lty=2, lwd=2)
+```
+
+# Contrast
+
+```{r}
+design <- model.matrix(~0+colDatR21$Sex)
+colnames(design) <- c("M","F") #levels(colDatR21$Sex)
+```
+
+```{r}
+y <- estimateDisp(y,design, robust=TRUE)
+```
+
+```{r}
+plotBCV(y)
+```
+
+# Model variable
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+head(fit$coefficients)
+```
+
+```{r}
+plotQLDisp(fit)
+```
+
+```{r}
+F_M <- makeContrasts(F-M, levels=design)
+```
+
+```{r}
+res <- glmQLFTest(fit, contrast=F_M)
+```
+
+```{r}
+topTags(res)
+```
+
+# Results
+
+```{r}
+# all.equal(row.names(y$Genes),row.names(res$table))
+resultsFVsM <- data.frame(topTags(res,n=dim(res$table)[1]))
+y$Genes <- y$Genes[row.names(resultsFVsM )]
+resultsFVsM $Gene_Symbol <- y$Genes
+save(resultsFVsM , res, y, file = "DE_SexFvsM_edgeR.Rda")
+resultsFVsM_sig <- subset(resultsFVsM,resultsFVsM $FDR<0.05) 
+```
+
+# Decision tests
+
+```{r}
+is.de <- decideTestsDGE(res)
+summary(is.de)
+```
+
+# plot DE genes
+
+```{r}
+plotMD(res, status=is.de, values=c(1,-1), col=c("red","blue"),
+       legend="topright")
+```
+
+# Gene Ontology annotations
+
+```{r}
+resultsFVsM_sigAn <- subset(resultsFVsM_sig, resultsFVsM_sig$Gene_Symbol!=" "); dim(resultsFVsM_sigAn)
+resultsFVsM_sigAn$geneID <-  select(org.Hs.eg.db, resultsFVsM_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")[which(!duplicated(select(org.Hs.eg.db, resultsFVsM_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")$ALIAS)),]$ENTREZID
+go <- goana(de =resultsFVsM_sigAn$geneID, species="Hs")
+topGO(go, n=15)
+kg <- kegga(de =resultsFVsM_sigAn$geneID, species="Hs")
+kg <-  kg[order(kg$P.DE),]
+```
+
+```{r}
+kable(resultsFVsM_sig)
+kable(topGO(go, n=15))
+```
+
+```{r}
+p <- ggplot(df, aes(y=log10.p.value,x=y,fill=as.factor(col)))+
+    geom_bar(stat="identity",width=0.2) +
+    scale_y_continuous(limits=c(0,10),
+                       labels=c(seq(0,7.5,2.5)," >10"),
+                       expand = c(0,0)) +
+    theme(axis.text=element_text(size=10)) +
+    scale_fill_manual(values = coloursv,guide = F) +
+    coord_flip()
+```
+
+
+#####################################################################
+# Female-male differences within IBS
+#####################################################################
+
+```{r}
+colDatR21IBS <- subset(colDatR21, colDatR21$Group==2)
+exprColDatR21IBS <- exprColDatR21[,colnames(exprColDatR21)%in%row.names(colDatR21IBS)]
+all.equal(row.names(colDatR21IBS),colnames(exprColDatR21IBS))
+colDatR21IBS$Sex <- as.factor(colDatR21IBS$Sex)
+```
+
+```{r}
+df_temp <- matrix(NA, ncol=dim(exprColDatR21IBS)[2], nrow=dim(exprColDatR21IBS)[1])
+for ( i in 1: length(rownames(exprColDatR21IBS))){
+  for(j in 1: length(colnames(exprColDatR21IBS)))
+if(exprColDatR21IBS[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21IBS)
+colnames(df_temp) <- colnames(exprColDatR21IBS)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>40)
+dim(df_temp1)
+# [1] 14945  134
+```
+
+# EdgeR differential expression
+
+```{r}
+exprColDatR21IBS1 <- exprColDatR21IBS[row.names(exprColDatR21IBS)%in%row.names(df_temp1),]
+y <- DGEList(counts=exprColDatR21IBS1,group=colDatR21IBS$Sex)
+y$Genes <- mapIds(org.Hs.eg.db, keys=rownames(y), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+# y$Genes <- as.data.frame(y$Genes)
+# colnames(y$Genes) <- "Symbol"
+y <- y[!is.na(y$Genes),]; dim(y)
+y$Genes <- y$Genes[!is.na(y$Genes)]
+length(y$Genes)
+y <- calcNormFactors(y)
+
+```
+
+# PCA plots
+
+```{r}
+pch <- c(0,1)
+colors <- rep(c("darkgreen", "red"), 2)
+plotMDS(y, col=colors[colDatR21IBS$Sex], pch=pch[colDatR21IBS$Sex])
+legend("bottomleft", legend=levels(colDatR21IBS$Sex), pch=pch, col=colors, ncol=2)
+
+plotMD(y, column=1)
+abline(h=0, col="red", lty=2, lwd=2)
+```
+
+# Contrast
+
+```{r}
+design <- model.matrix(~0+colDatR21IBS$Sex)
+colnames(design) <- c("M","F") #levels(colDatR21IBS$Sex)
+```
+
+```{r}
+y <- estimateDisp(y,design, robust=TRUE)
+```
+
+```{r}
+plotBCV(y)
+```
+
+# Model variable
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+head(fit$coefficients)
+```
+
+```{r}
+plotQLDisp(fit)
+```
+
+```{r}
+F_M <- makeContrasts(F-M, levels=design)
+```
+
+```{r}
+res <- glmQLFTest(fit, contrast=F_M)
+```
+
+```{r}
+topTags(res)
+```
+
+# Results
+
+```{r}
+# all.equal(row.names(y$Genes),row.names(res$table))
+resultsFVsM <- data.frame(topTags(res,n=dim(res$table)[1]))
+y$Genes <- y$Genes[row.names(resultsFVsM )]
+resultsFVsM $Gene_Symbol <- y$Genes
+save(resultsFVsM , res, y, file = "DE_SexFvsM_IBSonly_edgeR.Rda")
+resultsFVsM_sig <- subset(resultsFVsM,resultsFVsM $FDR<0.05) 
+```
+
+# Decision tests
+
+```{r}
+is.de <- decideTestsDGE(res)
+summary(is.de)
+```
+
+# plot DE genes
+
+```{r}
+plotMD(res, status=is.de, values=c(1,-1), col=c("red","blue"),
+       legend="topright")
+```
+
+# Gene Ontology annotations
+
+```{r}
+resultsFVsM_sigAn <- subset(resultsFVsM_sig, resultsFVsM_sig$Gene_Symbol!=" "); dim(resultsFVsM_sigAn)
+resultsFVsM_sigAn$geneID <-  select(org.Hs.eg.db, resultsFVsM_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")[which(!duplicated(select(org.Hs.eg.db, resultsFVsM_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")$ALIAS)),]$ENTREZID
+go <- goana(de =resultsFVsM_sigAn$geneID, species="Hs")
+topGO(go, n=15)
+kg <- kegga(de =resultsFVsM_sigAn$geneID, species="Hs")
+kg <-  kg[order(kg$P.DE),]
+```
+
+```{r}
+kable(resultsFVsM_sig)
+kable(topGO(go, n=15))
+```
+
+#####################################################################
+# Female-male differences within HC
+#####################################################################
+
+
+```{r}
+colDatR21HC <- subset(colDatR21, colDatR21$Group==1)
+exprColDatR21HC <- exprColDatR21[,colnames(exprColDatR21)%in%row.names(colDatR21HC)]
+all.equal(row.names(colDatR21HC),colnames(exprColDatR21HC))
+colDatR21HC$Sex <- as.factor(colDatR21HC$Sex)
+```
+
+```{r}
+df_temp <- matrix(NA, ncol=dim(exprColDatR21HC)[2], nrow=dim(exprColDatR21HC)[1])
+for ( i in 1: length(rownames(exprColDatR21HC))){
+  for(j in 1: length(colnames(exprColDatR21HC)))
+if(exprColDatR21HC[i,j]>1)  {
+  df_temp[i,j] <- 1
+}
+  else(df_temp[i,j] <- 0)
+}
+df_temp <- as.data.frame(df_temp)
+row.names(df_temp) <- row.names(exprColDatR21HC)
+colnames(df_temp) <- colnames(exprColDatR21HC)
+df_temp$sum1 <- rowSums(df_temp)
+df_temp1<- subset(df_temp, df_temp$sum1>16)
+dim(df_temp1)
+# [1] 14301  134
+```
+
+# EdgeR differential expression
+
+```{r}
+exprColDatR21HC1 <- exprColDatR21HC[row.names(exprColDatR21HC)%in%row.names(df_temp1),]
+y <- DGEList(counts=exprColDatR21HC1,group=colDatR21HC$Sex)
+y$Genes <- mapIds(org.Hs.eg.db, keys=rownames(y), keytype="ENSEMBL", column="SYMBOL", multiVals="first")
+# y$Genes <- as.data.frame(y$Genes)
+# colnames(y$Genes) <- "Symbol"
+y <- y[!is.na(y$Genes),]; dim(y)
+y$Genes <- y$Genes[!is.na(y$Genes)]
+length(y$Genes)
+y <- calcNormFactors(y)
+
+```
+
+# PCA plots
+
+```{r}
+pch <- c(0,1)
+colors <- rep(c("darkgreen", "red"), 2)
+plotMDS(y, col=colors[colDatR21HC$Sex], pch=pch[colDatR21HC$Sex])
+legend("topright", legend=levels(colDatR21HC$Sex), pch=pch, col=colors, ncol=2)
+
+plotMD(y, column=1)
+abline(h=0, col="red", lty=2, lwd=2)
+```
+
+# Contrast
+
+```{r}
+design <- model.matrix(~0+colDatR21HC$Sex)
+colnames(design) <- c("M","F") #levels(colDatR21HC$Sex)
+```
+
+```{r}
+y <- estimateDisp(y,design, robust=TRUE)
+```
+
+```{r}
+plotBCV(y)
+```
+
+# Model variable
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+head(fit$coefficients)
+```
+
+```{r}
+plotQLDisp(fit)
+```
+
+```{r}
+F_M <- makeContrasts(F-M, levels=design)
+```
+
+```{r}
+res <- glmQLFTest(fit, contrast=F_M)
+```
+
+```{r}
+topTags(res)
+```
+
+# Results
+
+```{r}
+# all.equal(row.names(y$Genes),row.names(res$table))
+resultsFVsM <- data.frame(topTags(res,n=dim(res$table)[1]))
+y$Genes <- y$Genes[row.names(resultsFVsM )]
+resultsFVsM $Gene_Symbol <- y$Genes
+save(resultsFVsM , res, y, file = "DE_SexFvsM_HConly_edgeR.Rda")
+resultsFVsM_sig <- subset(resultsFVsM,resultsFVsM $FDR<0.05) 
+```
+
+# Decision tests
+
+```{r}
+is.de <- decideTestsDGE(res)
+summary(is.de)
+```
+
+# plot DE genes
+
+```{r}
+plotMD(res, status=is.de, values=c(1,-1), col=c("red","blue"),
+       legend="topright")
+
+```
+
+# Gene Ontology annotations
+
+```{r}
+resultsFVsM_sigAn <- subset(resultsFVsM_sig, resultsFVsM_sig$Gene_Symbol!=" "); dim(resultsFVsM_sigAn)
+resultsFVsM_sigAn$geneID <-  select(org.Hs.eg.db, resultsFVsM_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")[which(!duplicated(select(org.Hs.eg.db, resultsFVsM_sigAn$Gene_Symbol, c("ENTREZID","GENENAME"), "ALIAS")$ALIAS)),]$ENTREZID
+go <- goana(de =resultsFVsM_sigAn$geneID, species="Hs")
+topGO(go, n=15)
+kg <- kegga(de =resultsFVsM_sigAn$geneID, species="Hs")
+kg <-  kg[order(kg$P.DE),]
+```
+
+```{r}
+kable(resultsFVsM_sig)
+kable(topGO(go, n=15))
+```
+
+# within IBS M-F looked a little different from within HC
+
+```{r}
+load("DE_SexFvsM_HConly_edgeR.Rda")
+resHCFVsM <- resultsFVsM 
+resHCFVsMSig <- subset(resHCFVsM, resHCFVsM$FDR<0.05); dim(resHCFVsMSig)
+load("DE_SexFvsM_IBSonly_edgeR.Rda")
+resIBSFVsM <- resultsFVsM 
+resIBSFVsMSig <- subset(resIBSFVsM, resIBSFVsM$FDR<0.05); dim(resIBSFVsMSig)
+UniHCFVsM <- resHCFVsMSig[!resHCFVsMSig$Gene_Symbol%in%resIBSFVsMSig$Gene_Symbol,]; dim(UniHCFVsM)
+kable(UniHCFVsM)
+```
+
+```{r}
+UniIBSFVsM <- resIBSFVsMSig[!resIBSFVsMSig$Gene_Symbol%in%resHCFVsMSig$Gene_Symbol,]; dim(UniIBSFVsM)
+kable(UniIBSFVsM)
+```
+
+```{r}
+kable(resHCFVsM[resHCFVsM$Gene_Symbol%in%UniIBSFVsM$Gene_Symbol,])
+```
+
+# within IBS M-F looked a little different from within HC
+
+```{r}
+load("DE_SexFvsM_HConly_edgeR.Rda")
+resHCFVsM <- resultsFVsM 
+resHCFVsMSig <- subset(resHCFVsM, resHCFVsM$FDR<0.05); dim(resHCFVsMSig)
+load("DE_SexFvsM_IBSonly_edgeR.Rda")
+resIBSFVsM <- resultsFVsM 
+resIBSFVsMSig <- subset(resIBSFVsM, resIBSFVsM$FDR<0.05); dim(resIBSFVsMSig)
+UniHCFVsM <- resHCFVsMSig[!resHCFVsMSig$Gene_Symbol%in%resIBSFVsMSig$Gene_Symbol,]; dim(UniHCFVsM)
+kable(UniHCFVsM)
+```
+
+```{r}
+UniIBSFVsM <- resIBSFVsMSig[!resIBSFVsMSig$Gene_Symbol%in%resHCFVsMSig$Gene_Symbol,]; dim(UniIBSFVsM)
+kable(UniIBSFVsM)
+```
+
+```{r}
+kable(resHCFVsM[resHCFVsM$Gene_Symbol%in%UniIBSFVsM$Gene_Symbol,])
+```
+
+
+
+```{r}
+# # DGEList
+# y    <- DGEList(counts=exprColDatR21, genes = metaDat)
+# 
+# # FIlter on low expression in the smallest group
+# keep <- rowSums(cpm(y) > 1) >= 36 
+# y    <- y[keep, ]
+# 
+# # Design matrix
+# design <- model.matrix(~ 0 + colDatR21$Dx + colDatR21$Lane)
+# colnames(design) <- c("HC","IBS","Lane6")
+# 
+# # Contrast
+# my.contrast <- makeContrasts(IBS_vs_HC = IBS-HC, levels = design)
+# 
+# # Normalize counts
+# yy <- calcNormFactors(y, method = "TMM")
+# 
+# # Estimate common, trend and tagwise dispersiondispersion
+# # yy <- estimateGLMCommonDisp(yy,design, verbose = TRUE)
+# # yy <- estimateGLMTrendedDisp(yy, design)
+# # yy <- estimateGLMTagwiseDisp(yy, design)
+# yy <- estimateDisp(yy,design)
+# 
+# # Fit model
+# fit <- glmFit(yy, design)
+# 
+# # Contrast
+# lrt1                   <- glmLRT(fit, contrast = my.contrast[,"IBS_vs_HC"])
+# lrt1$table             <- cbind(lrt1$table, FDR = p.adjust(lrt1$table$PValue, method = "BH"))
+# names(lrt1$table)      <- paste(names(lrt1$table),"IBS_vs_HC", sep = "_")
+# lrt1_out               <- as.data.frame(lrt1$table)
+# resultsEdgeRIBS_HC     <- cbind(lrt1_out, yy$genes)
+# resultsEdgeRIBS_HC     <- resultsEdgeRIBS_HC[order(resultsEdgeRIBS_HC$PValue_IBS_vs_HC),]
+# resultsEdgeRIBS_HC_sig <- resultsEdgeRIBS_HC[resultsEdgeRIBS_HC$FDR_IBS_vs_HC<0.2,]
+# resultsEdgeRIBS_HC_sig
+```
+

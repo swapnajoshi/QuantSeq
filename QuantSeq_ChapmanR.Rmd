@@ -1,0 +1,866 @@
+---
+title: "QuantSeqR"
+author: "Swapna Mahurkar-Joshi"
+date: "October 26, 2017"
+output: word_document
+---
+
+# Set up
+
+```{r}
+# source("https://bioconductor.org/biocLite.R")
+# biocLite(c("ShortRead","Rsubread","ggplot2","dplyr","cowplot","ggplot2"))
+library(ShortRead)
+library(ggplot2)
+library(dplyr)
+library(Rsubread)
+library(cowplot)
+library(ggplot2)
+library(biomaRt)
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("gridExtra")
+# source("https://bioconductor.org/biocLite.R")
+# biocLite(c("Rsamtools", "GenomicAlignments", "GenomeInfoDb", "GenomicRanges"))
+```
+
+# Define locations
+
+## Locations of various files and directories.
+
+```{r}
+    setwd('C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq')
+    fastq_dirs <- 'C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/fastQfiles'
+    sinkpath <- 'C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/bam_files/'
+    ref_fa <- 'C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/ref_dir/Homo_sapiens.GRCh38.dna_sm.primary_assembly.fa'
+    ref_dir <- 'C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/ref_dir'
+    gtf.file <- file.path(ref_dir, "hs38.gtf.gz")
+    sqlite_file <- 'Homo_sapiens.GRCh38.84.sqlite'
+    sqlite_path <- file.path(ref_dir, sqlite_file)
+    workflow_stats <- list()
+    
+```
+
+# Define some functions for plotting
+
+## Here we define some ggplot2 functions based on the qa function of the ShortRead package.
+
+```{r}
+   qa_plots <- function(shortfq_obj) {
+    x <- ShortRead::qa(shortfq_obj, lane='')
+    nuc_plot <- ggplot(x[['perCycle']]$baseCall, aes(x=Cycle, y=Count, colour=Base)) + geom_line() + cowplot::theme_cowplot()
+    qual_plot <- x[['perCycle']]$quality %>% group_by(Cycle) %>% summarise(QualScore=sum(Score*Count)/sum(Count)) %>% ungroup() %>% 
+        ggplot(aes(x=Cycle, y=QualScore)) + geom_line() + cowplot::theme_cowplot()
+    size_plot <- ggplot(data.frame(frag_size=width(shortfq_obj)), aes(x=frag_size)) + 
+        geom_bar(fill='pink', colour='black') + cowplot::theme_cowplot()
+    base_plot <- ggplot(data.frame(idx=1:50, dat=as.character(sread(shortfq_obj)[1:50]))) + 
+        geom_text(aes(x=1, y=idx, label=dat), size=rel(2.5), family='mono', hjust=0) + xlim(1,1.8) +
+        theme_bw() + theme(axis.text.x=element_text(size=0)) + xlab('')
+    return(list(nuc_plot=nuc_plot, qual_plot=qual_plot, size_plot=size_plot, base_plot=base_plot))
+} 
+```
+
+# Import a sample of data
+
+## The ShortRead::yield function is used to load a subset of 1M 151bp single end Nextseq reads from a .fastq file.
+
+```{r}
+fq_fn <- list.files(fastq_dirs, 'fastq.gz')
+fq_path <- file.path(fastq_dirs, fq_fn)
+fp <- dput(as.character((fq_path)))
+fq_data <- yield(FastqSampler(fq_path[1]),1000000)
+
+fq_data_list <- list()
+for(i in 1:3){
+fq_data_list[[i]] <- yield(FastqSampler(fp[[i]]))
+}
+save(fq_data_list, file = "fq_data_list.Rda")
+```
+
+# Explore the raw data
+
+## We now generate 3 plots using the qa_plots function defined above: * Plot A depicts the proportion of reads with each nucleotide at positions 1-151. It is evident that G’s predominate towards the end of the reads, and A’s increase up to around 60bp before reducing. The read distribution seems to change markedly at around position 10. Plot B depicts the average quality score at positions 1-151 across all reads. Quality reduces towards the end of the read with an uptick towards the very end, and the first 10bp seem to have lower quality than the second 10bp. Plot C is a histogram of read lengths: all reads are 151bp at this stage.
+
+```{r}
+qp <- qa_plots(fq_data)
+
+qp <- list()
+for ( i in 1:3){
+ggsave(marrangeGrob(qa_plots(fq_data_list[[i]]), nrow = 3, ncol =1), file=paste0(i,"_1.pdf"))
+}
+
+```
+
+```{r}
+cowplot::plot_grid(qp$nuc_plot, qp$qual_plot, qp$size_plot, labels='auto')
+```
+
+## Viewing a sample of 50 reads demonstrates what can be seen in the summary plots above. Many reads have strings of G’s towards the end, and poly-A tails are also in evidence. The NextSeq sequencing chemistry returns a G when there is very low signal, suggesting that in fact the increase in incidence of G’s is related to sequence quality rather than really being sequence related.
+
+```{r}
+qp$base_plot
+```
+
+## It is also useful to view the most frequent sequences which shows that strings of A’s followed by G’s are very common:
+
+```{r}
+ShortRead:::.freqSequences(qa(fq_data, lane=''), "read")
+```
+
+# Remove the 5’ Adapter
+
+## The first 12bp are in fact adapter sequence, hence the market shift in both quality and base distributions at this point. These can be removed using the ShortRead::narrow function:
+
+```{r}
+fq = fq_data
+fq <- ShortRead::narrow(fq, start=13)
+workflow_stats$step01_start <- length(fq)
+length(fq)
+fq_list <- lapply(fq,ShortRead::narrow,start = 13)
+
+```
+
+## Regenerating the qa plots confirms that this has happened and we now have a 53 bp read size:
+
+```{r}
+qp <- qa_plots(fq)
+cowplot::plot_grid(qp$nuc_plot, qp$qual_plot, qp$size_plot, labels='auto')
+
+
+qp <- list()
+for ( i in 1:3){
+ggsave(marrangeGrob(qa_plots(fq_list[[i]]), nrow = 3, ncol =1), file=paste0(i,"_2.pdf"))
+}
+
+```
+
+# Remove poor quality data at the 3’ end of the read
+
+## The ShortRead::trimTailw function removes low-quality reads from the 3’ end using a sliding window of nucleotides falling at or below a quality threshold. Here we define a sliding window size of 12 by setting halfwidth to 6, a number of nucleotides as 6, and a quality threshold of 4. We also remove reads that are now below 36bp in length:
+
+```{r}
+fq <- ShortRead::trimTailw(fq, k=6, a="4", halfwidth=6)
+fq <- fq[width(fq) >= 36]
+workflow_stats$step02_poorqual <- length(fq)
+length(fq)
+
+
+fq_list <- lapply(fq_list, ShortRead::trimTailw, k = 6, a="4", halfwidth=6)
+for( i in 1:3){
+fq_list[[i]] <- fq_list[[i]][width(fq_list[[i]]) >= 36]
+print(length(fq_list[[i]]))
+}
+
+workflow_stats$step02_poorqual <- length(fq)
+length(fq_list)
+```
+
+## The quality plots now look markedly different before with the relative proportions of the nucleotides looking much more even, although A’s are still over-represented since we haven’t removed the poly-A sequences yet. Quality still declines but now levels out as would be expected given our filtering. There also appear to be a subset of full length reads of high quality as indicated by the uptick at the right hand side of plots B and C.
+
+```{r}
+qp <- qa_plots(fq)
+cowplot::plot_grid(qp$nuc_plot, qp$qual_plot, qp$size_plot, labels='auto')
+
+qp <- list()
+for ( i in 1:3){
+ggsave(marrangeGrob(qa_plots(fq_list[[i]]), nrow = 3, ncol =1), file=paste0(i,"_3.pdf"))
+}
+```
+
+## It is useful to eyeball a sample of reads at this point to confirm the removal of the low quality G bases and the retention of the poly-A sequences.
+
+```{r}
+qp$base_plot
+```
+
+# Trim poly-A tails
+
+## The poly-A tails can be identified using the ShortRead::trimEnds function to examine the right end of the reads and return the location of any A’s. Setting ranges = TRUE returns a ranges object which can then be fed into the ShortReads::narrow function to do the actual clipping.
+
+```{r}
+narrow_ranges <- ShortRead::trimEnds(sread(fq), right=TRUE, "A", relation="==", ranges=TRUE) 
+fq <- ShortRead::narrow(fq, start(narrow_ranges), end(narrow_ranges))
+fq <- fq[width(fq) >= 36]
+workflow_stats$step03_polya <- length(fq)
+length(fq)
+
+
+narrow_ranges_list <- lapply(lapply(fq_list,sread), ShortRead::trimEnds, right=TRUE, "A", relation="==", ranges=TRUE)
+
+fq_list1 <- list()
+for( i in 1:3){
+fq_list1[[i]] <- ShortRead::narrow(fq_list[[i]], start(narrow_ranges_list[[i]]), end(narrow_ranges_list[[i]]))
+}
+
+fq_list2 <- list()
+for( i in 1:3){
+fq_list2[[i]] <- fq_list1[[i]][width(fq_list1[[i]]) >= 36]
+print(length(fq_list2[[i]]))
+}
+
+
+```
+
+## Plot A shows that we have succeeded in reducing the over-representation of A’s in the first at around 50 cycles.
+
+```{r}
+qp <- qa_plots(fq)
+cowplot::plot_grid(qp$nuc_plot, qp$qual_plot, qp$size_plot, labels='auto')
+
+for ( i in 1:3){
+ggsave(marrangeGrob(qa_plots(fq_list2[[i]]), nrow = 3, ncol =1), file=paste0(i,"_4.pdf"))
+}
+ 
+```
+
+## Looking at the reads we can confirm the removal of poly-A’s , however, there are still some embedded poly-A sequences that are 3’flanked by non-A nucleotides which need to be removed.
+
+```{r}
+qp$base_plot
+```
+
+# Trim embedded poly-A tails
+
+## Here we apply the regexpr function to the read sequences (using ShortRead::sread) to identify the first position of a polyA of length 10. This returns a vector of the same length as the ShortReadQ object which is either the start position of the polyA or -1 if no polyA was present. This vector can be combined with the length of the read and fed into the ShortRead::narrow function to clip those reads that need to be clipped. This gives the final set of reads for mapping.
+
+```{r}
+polyApos <- regexpr(pattern= 'AAAAAAAAAA', sread(fq), fixed=TRUE) %>% unlist()
+polyAclip_idx <- which(polyApos >= 0)
+polyAclip <- width(fq)
+polyAclip[polyAclip_idx] <- polyApos[polyAclip_idx] 
+fq <- narrow(fq, end=polyAclip)
+fq <- fq[width(fq) >= 36]
+workflow_stats$step04_3padapt <- length(fq)
+length(fq)
+
+polyApos <- regexpr(pattern= 'AAAAAAAAAA', lapply(fq,sread), fixed=TRUE) %>% unlist()
+
+# for ( i in 1:3){
+# polyAclip_idx[[i]] <- which(polyApos[[i]] >= 0)
+# }
+# 
+# polyAclip <- list()
+# for( i in 1:3){
+# polyAclip[[i]] <- width(fq_list[[i]])
+# }
+# polyAclip[polyAclip_idx] <- polyApos[polyAclip_idx] 
+# fq <- narrow(fq, end=polyAclip)
+# fq <- fq[width(fq) >= 36]
+# workflow_stats$step04_3padapt <- length(fq)
+# length(fq)
+```
+
+# We see a slight improvement in the quality plots.
+
+```{r}
+qp <- qa_plots(fq)
+cowplot::plot_grid(qp$nuc_plot, qp$qual_plot, qp$size_plot, labels='auto')
+```
+
+## And confirm that embedded poly-A’s have been removed.
+
+```{r}
+qp$base_plot
+```
+#create reference
+```{r}
+buildindex(basename="reference_index",reference=ref_fa)
+```
+
+# Align to reference genome using Rsubread
+
+## At this point we have data that can be fed into a standard single end RNAseq workflow. RSubread is a useful aligner for single end RNAseq data since it doesn’t try to map across splice junctions
+
+```{r}
+tmp_fastq <- tempfile()
+writeFastq(fq_list[[1]], tmp_fastq)
+tmp_bam <- tempfile()
+
+
+align(readfile1=fq_path[1], index=file.path(ref_dir,"reference_index"),
+      input_format='gzFASTQ',
+      output_format = "BAM",
+      output_file=paste(as.character(fq_path[1]),"subread",                      sep= "."),   
+      nthreads=8)
+
+
+# file.copy(from=tempfile(), to="/home/data2/Swapna/RNAQuantSeq/trimmedFastq_files/", 
+#            recursive = FALSE, 
+#           copy.mode = TRUE)
+
+```
+
+```{r}
+workflow_stats$step05_alignscores <- propmapped(tmp_bam)
+```
+
+# Count reads mapping to features
+
+## Use RSubread::featureCounts to count features mapping to exons: note that strand-specific is set to 1 whereas, depending on the library preparation method, this is often set to 2 for poly-A RNAseq.
+
+```{r}
+fc_ensembl_84 <- featureCounts(files=tmp_bam,
+                               annot.ext=gtf.file,
+                               isGTFAnnotationFile=TRUE,
+                               GTF.featureType="exon",
+                               GTF.attrType="gene_id",
+                               useMetaFeatures=TRUE,
+                               allowMultiOverlap=FALSE,
+                               nthreads=8,
+                               strandSpecific=2,
+                               countMultiMappingReads=FALSE)
+```
+
+# Count reads mapping to protein-coding genes
+
+## First of all we can use the ensembldb package to make a GRanges object containing information on all protein coding genes.
+
+```{r}
+if(!file.exists(sqlite_path)) {
+    ## generate the SQLite database file
+    ensembldb::ensDbFromGtf(gtf=gtf.file, path=ref_dir, outfile=sqlite_file)
+}
+EnsDb.Hsapiens.v84 <- ensembldb::EnsDb(sqlite_path)
+ag <- ensembldb::genes(EnsDb.Hsapiens.v84, filter=list(GenebiotypeFilter('protein_coding'))) 
+ag
+```
+
+## Then we can count the number of reads in the exons of all genes, and those in the exons of protein coding genes.
+
+```{r}
+#count of reads in exons
+fc_mat <- fc_ensembl_84$counts
+workflow_stats$step06_readsinexons <- sum(fc_mat)
+
+#count of reads in protein coding exons
+fc_mat_pc <- fc_mat[rownames(fc_mat) %in% ag$gene_id,]
+workflow_stats$step07_readsinproteincodingexons <- sum(fc_mat_pc)
+```
+
+# Evaluate the performance of the workflow
+
+## During the workflow we have recorded the number of reads retained at each point and this is summarised in the plot below. Eventually around 50% of reads map to a protein coding exon, although it is possible that this number could be increased by optimising the library preparation. The libraries sequenced in this experiment had an insert size range from 122-1000bp with an average size of 186bp, whereas this can be increaed to 122-1500bp (avg 259bp) or 122-2000bp (avg 355bp). Since around 20% of reads are lost in the first quality and size filtering step, a longer insert size could reduce this attrition.
+
+```{r}
+workflow_stats_df <- workflow_stats
+workflow_stats_df$step05_alignscores <- workflow_stats_df$step05_alignscores[1,'NumMapped']
+workflow_stats_df <- as.data.frame(workflow_stats_df) %>% 
+    mutate(fn=fq_fn) %>%
+    tidyr::gather(step, readcount,-fn)
+
+library(ggplot2)
+ggplot(workflow_stats_df, aes(x=step, y=readcount, fill=step)) + 
+    geom_bar(stat='identity') + 
+    geom_text(aes(label=round(readcount/10^6,3))) +
+    cowplot::theme_cowplot()  + 
+    xlab('') + ggtitle("Lexogen 3'Quantseq Read Processing") +
+    theme(legend.position='none',
+          axis.text.x=element_text(angle=330, vjust=1, hjust=0),
+          plot.margin = unit(c(2, 5, 0, 0), "lines"))
+```
+
+# Conclusion
+
+## This vignette demonstrates a prototype analysis pipeline developed for the novel Quantseq 3’UTR RNA sequencing kit from Lexogen. Although many approaches are available for the analysis of NGS data, R/Bioconductor has the advantage of being able to work from end to end in the same environment. Its strong visualisation capabilities and high level functions allow the impact of analysis choices at each step to be readily understood during the prototyping stage. Once prototyping is complete, a production pipeline could be implemented using the BiocParallel package with BatchJobs serving as the interface between R and a wide range of queuing software including SGE and Torque.
+
+The workflow developed here for Lexogen Quantseq data showed that around 50% of reads generated are available for subsequent count based differential expression analysis analysis, and that modifying the insert size at the library preparation stage may increase this proportion.
+##############################################################################################
+This is a code for development of deseq analysis pipeline implemented in the Quantseq bluebee Rmd file.
+################################################################################################
+# normalize all data together
+```{r}
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/colonTissueRNASeqData.Rda")
+colDat$Group <- as.factor(colDat$Group)
+colDat$Lane<- as.factor(colDat$Lane)
+colDat$Sex <- as.factor(colDat$Sex)
+colDat$BH_Colon_Exam<- as.factor(colDat$BH_Colon_Exam)
+
+library(DESeq2)
+ddsG <- DESeqDataSetFromMatrix (countData = exprColDat,
+                              colData = colDat,
+                              design= ~ Lane + Group)
+
+ddsS <- DESeqDataSetFromMatrix (countData = exprColDat,
+                              colData = colDat,
+                              design= ~ Lane + Sex)
+ddsBh <- DESeqDataSetFromMatrix (countData = exprColDat,
+                              colData = colDat,
+                              design= ~ Lane + BH_Colon_Exam)
+ colDat$BH_Colon_Exam <- relevel(colDat$BH_Colon_Exam, ref = "N")
+ 
+ ddsBhRefN <- DESeqDataSetFromMatrix (countData = exprColDat,
+                              colData = colDat,
+                              design= ~ Lane + BH_Colon_Exam)
+```
+
+# Pre-filtering
+
+While it is not necessary to pre-filter low count genes before running the DESeq2 functions, there are two reasons which make pre-filtering useful: by removing rows in which there are very few reads, we reduce the memory size of the dds data object, and we increase the speed of the transformation and testing functions within DESeq2. 
+### criteria 1: Here we perform a minimal pre-filtering to keep only rows that have at least 10 reads total. Note that more strict filtering to increase power is automatically applied via independent filtering on the mean of normalized counts within the results function.
+
+Alternate criteria : Filter out genes where there are less than 10% samples with normalized counts greater than or equal to 5.
+
+```{r}
+
+keep <- rowSums(counts(ddsG)) >= 5
+ddsG <- ddsG[keep,]
+
+keep <- rowSums(counts(ddsS)) >= 5
+ddsS <- ddsS[keep,]
+
+keep <- rowSums(counts(ddsBh)) >= 5
+ddsBh <- ddsBh[keep,]
+
+keep <- rowSums(counts(ddsBhRefN)) >= 5
+ddsBhRefN <- ddsBhRefN[keep,]
+
+
+
+
+ddsG1 <- estimateSizeFactors(ddsG)
+norRNAseqGr <- counts(ddsG1, normalized=TRUE); dim(norRNAseqGr)
+
+ddsS1 <- estimateSizeFactors(ddsS)
+norRNAseqSex <- counts(ddsS1, normalized=TRUE); dim(norRNAseqSex)
+
+ddsBh1 <- estimateSizeFactors(ddsBh)
+norRNAseqBh <- counts(ddsBh1, normalized=TRUE); dim(norRNAseqBh)
+
+save(norRNAseqGr, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/norRNAseqGr.rda")
+save(norRNAseqSex, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/norRNAseqSex.rda")
+save(norRNAseqBh, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/norRNAseqBh.rda")
+
+save(an, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/quantSeq_all_annotations.rda")
+```
+
+```{r}
+library(biomaRt)
+ddsG <- DESeq(ddsG)
+ddsS <- DESeq(ddsS)
+ddsBh <- DESeq(ddsBh)
+ddsBhRefN <- DESeq(ddsBhRefN)
+
+# listEnsembl()
+# listMarts()
+# datasets <- listDatasets(useMart("ensembl"))
+# head(datasets)
+
+mart.hs <- useMart("ensembl", "hsapiens_gene_ensembl")
+# attributes <- listAttributes(mart.hs)
+# head(attributes)
+# filters <- listFilters(mart.hs)
+# head(filters)
+an <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol", "chromosome_name"), filters = "ensembl_gene_id", values = row.names(exprColDat), mart = mart.hs);dim(an)
+
+an.all <- as.data.frame(matrix(NA, nrow = dim(exprColDat)[1], ncol = dim(an)[2]))
+
+for ( i in 1:dim(exprColDat)[1]) {
+  
+if(row.names(exprColDat)[i] %in%  an[,1] == TRUE) {
+  an.all[i,] <- an[which(an[,1] %in% row.names(exprColDat)[i]),]
+}
+else if(row.names(exprColDat)[i] %in%  an[,1] == FALSE) {
+  an.all[i,] <- c("","","")
+}
+}
+
+
+```
+
+# If you have additional feature data, it can be added to the DESeqDataSet by adding to the metadata columns of a newly constructed object. (Here we add redundant data just for demonstration, as the gene names are already the rownames of the dds.)
+
+```{r}
+featureData <- as.data.frame(matrix(NA, nrow = dim(ddsG)[1], ncol = dim(an)[2]))
+
+for ( i in 1:dim(ddsG)[1]) {
+
+if(row.names(ddsG)[i] %in%  an[,1] == TRUE) {
+  featureData[i,] <- an[which(an[,1] %in% row.names(ddsG)[i]),]
+}
+else if(row.names(ddsG)[i] %in%  an[,1] == FALSE) {
+  featureData[i,] <- c(NA,NA,NA)
+}
+}
+
+all(rownames(ddsG) == featureData$ensembl_gene_id)      
+all(rownames(ddsS) == featureData$ensembl_gene_id)    
+all(rownames(ddsBh) == featureData$ensembl_gene_id)    
+
+mcols(ddsG) <- cbind(mcols(ddsG), featureData)
+row.names(mcols(ddsG)) <- row.names(ddsG)
+resG <- results(ddsG, contrast=c("Group","2","1"))
+mcols(ddsG) <- cbind(mcols(ddsG), resG)
+resG <- resG[order(resG$pvalue),]
+annotResG <-  mcols(ddsG)
+annotResGfdr01 <- subset(annotResG, annotResG$padj<0.1); dim(annotResGfdr01)
+
+mcols(ddsS) <- cbind(mcols(ddsS), featureData)
+row.names(mcols(ddsS)) <- row.names(ddsS)
+resS <- results(ddsS, contrast=c("Sex","2","1"))
+mcols(ddsS) <- cbind(mcols(ddsS), resS)
+resS <- resS[order(resS$pvalue),]
+annotResS <-  mcols(ddsS)
+annotResSfdr01 <- subset(annotResS, annotResS$padj<0.1); dim(annotResSfdr01)
+
+mcols(ddsBh) <- cbind(mcols(ddsBh), featureData)
+row.names(mcols(ddsBh)) <- row.names(ddsBh)
+resBh <- results(ddsBh, contrast=c("BH_Colon_Exam","D","C"))
+mcols(ddsBh) <- cbind(mcols(ddsBh), resBh)
+resBh <- resBh[order(resBh$pvalue),]
+annotResBh <-  mcols(ddsBh)
+annotResBhfdr01 <- subset(annotResBh, annotResBh$padj<0.1); dim(annotResBhfdr01)
+
+mcols(ddsBhRefN) <- cbind(mcols(ddsBhRefN), featureData)
+row.names(mcols(ddsBhRefN)) <- row.names(ddsBhRefN)
+resBhNC <- results(ddsBhRefN, contrast=c("BH_Colon_Exam","N","C"))
+mcols(ddsBhRefN) <- cbind(mcols(ddsBhRefN), resBhNC)
+resBhNC <- resBhNC[order(resBhNC$pvalue),]
+annotResBhNC <-  mcols(ddsBhRefN)
+annotResBhNCfdr01 <- subset(annotResBhNC, annotResBhNC$padj<0.1); dim(annotResBhNCfdr01)
+mcols(ddsBhRefN) <-mcols(ddsBhRefN)[,c(1:38)]
+mcols(ddsBhRefN) <- cbind(mcols(ddsBhRefN), featureData)
+row.names(mcols(ddsBhRefN)) <- row.names(ddsBhRefN)
+resBhND <- results(ddsBhRefN, contrast=c("BH_Colon_Exam","N","D"))
+mcols(ddsBhRefN) <- cbind(mcols(ddsBhRefN), resBhND)
+resBhND <- resBhND[order(resBhND$pvalue),]
+annotResBhND <-  mcols(ddsBhRefN)
+annotResBhNDfdr01 <- subset(annotResBhND, annotResBhND$padj<0.1); dim(annotResBhNDfdr01)
+mcols(ddsBhRefN) <-mcols(ddsBhRefN)[,c(1:38)]
+mcols(ddsBhRefN) <- cbind(mcols(ddsBhRefN), featureData)
+row.names(mcols(ddsBhRefN)) <- row.names(ddsBhRefN)
+resBhNM <- results(ddsBhRefN, contrast=c("BH_Colon_Exam","N","M"))
+mcols(ddsBhRefN) <- cbind(mcols(ddsBhRefN), resBhNM)
+resBhNM <- resBhNM[order(resBhNM$pvalue),]
+annotResBhNM <-  mcols(ddsBhRefN)
+annotResBhNMfdr01 <- subset(annotResBhNM, annotResBhNM$padj<0.1); dim(annotResBhNMfdr01)
+
+write.csv(annotResG, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QuantAllannotResGroup.csv")
+write.csv(annotResS, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QuantAllannotResSex.csv")
+write.csv(annotResBh, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QuantAllannotResBh.csv")
+write.csv(annotResBhND, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QuantAllannotResBhND.csv")
+write.csv(annotResBhNC, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QuantAllannotResBhNC.csv")
+write.csv(annotResBhNM, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/QuantAllannotResBhNM.csv")
+
+
+save(ddsG, ddsS, ddsBh,ddsBhRefN, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/ddsAll.rda")
+
+save(featureData, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/featureData.rda")
+```
+
+Plots
+
+```{r}
+library(ggplot2)
+ggsave(plotMA(resG,ylim=c(-2,2),main="DESeq2"), file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/volExpGroup.png")
+ggsave(plotMA(resS,ylim=c(-2,2),main="DESeq2"), file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/volExpSex.png")
+ggsave(plotMA(resBhCN,ylim=c(-2,2),main="DESeq2"), file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/volExpBhCN.png")
+ggsave(plotMA(resBhND,ylim=c(-2,2),main="DESeq2"), file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/volExpBhND.png")
+
+
+tab = data.frame(logFC = res$log2FoldChange, negLogPval = -log10(res$pvalue))
+head(tab)
+par(mar = c(5, 4, 4, 4))
+plot(tab, pch = 16, cex = 0.6, xlab = expression(log[2]~fold~change), ylab = expression(-log[10]~pvalue))
+lfc = 1
+pval = 0.01
+signGenes = (abs(tab$logFC) > lfc & tab$negLogPval > -log10(pval))
+points(tab[signGenes, ], pch = 16, cex = 0.8, col = "red") 
+abline(h = -log10(pval), col = "green3", lty = 2) 
+abline(v = c(-lfc, lfc), col = "blue", lty = 2) 
+mtext(paste("pval =", pval), side = 4, at = -log10(pval), cex = 0.8, line = 0.5, las = 1) 
+mtext(c(paste("-", 2^lfc, "fold"), paste("+", 2^lfc, "fold")), side = 3, at = c(-lfc, lfc), cex = 0.8, line = 0.5)
+
+png("volcano_RNAseq_2fc_p0.05.png", height = 1800, width = 1800, res = 200)
+par(mar = c(5, 4, 4, 4))
+plot(tab, pch = 16, cex = 0.6, xlab = expression(log[2]~fold~change), ylab = expression(-log[10]~pvalue))
+lfc = 1
+pval = 0.01
+signGenes = (abs(tab$logFC) > lfc & tab$negLogPval > -log10(pval))
+points(tab[signGenes, ], pch = 16, cex = 0.8, col = "red") 
+abline(h = -log10(pval), col = "green3", lty = 2) 
+abline(v = c(-lfc, lfc), col = "blue", lty = 2) 
+mtext(paste("pval =", pval), side = 4, at = -log10(pval), cex = 0.8, line = 0.5, las = 1) 
+mtext(c(paste("-", 2^lfc, "fold"), paste("+", 2^lfc, "fold")), side = 3, at = c(-lfc, lfc), cex = 0.8, line = 0.5)
+dev.off()
+
+```
+
+```{r}
+# x = count
+# y = colDat
+# a = main variable
+# b = adjust variable
+# d = filter counts
+# f = feature data
+deseqOut <- function(x, y, a, b, d,f) {
+  a <-  substitute(a)
+  b <- substitute(b)
+  var_a <- setNames(as.list(seq_along(y)), names(y))
+  aN <- names(var_a[which(names(var_a)%in%a)])
+  bN <- names(var_a[which(names(var_a)%in%b)])
+  str1 <- "~"
+  str2 <- paste(bN,aN, sep = "+")
+  strAll=paste(str1,str2,sep = " ")
+  dds <- DESeqDataSetFromMatrix (countData = x, colData = y, design = eval(parse(text=strAll)))
+  print(dds)
+  keep <-  rowSums(counts(dds)) >= d
+  dds <- dds[keep,]
+  dds <- DESeq(dds)
+  mcols(dds) <- cbind(mcols(dds),f)
+  row.names(mcols(dds)) <- row.names(dds)
+  var1 <- y[,which(names(var_a)%in%a)]
+  res <- results(dds, contrast=c(a,levels(factor(var1))[2],levels(factor(var1))[1]))
+  mcols(dds) <- cbind(mcols(dds), res)
+  resAn <- mcols(dds)
+  return(resAn)
+}
+# str2 <- levels(factor(a))[2]
+#   str1 <- levels(factor(a))[1] 
+#   str3=",levels=design)" 
+#   strAll=paste(str1,str2,str3,sep="")
+#   var1 <- y[,which(names(var_a)%in%a)]
+# contrast=c(a,levels(factor(var1))[2],levels(factor(var1))[1])
+QDxRes <- deseqOut(exprColDat, colDat, "Group", "Lane", 5, featureData)
+```
+
+# subset data for individual analyses
+# 1. Plasma 
+
+```{r}
+
+```
+
+
+
+# cluster 1 vs 3 differentially methylated CPGs and genes expression changes
+
+```{r}
+load("colon_meth_subgrops_all.Rda")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/norRNAseq.rda")
+dmp13 <- read.csv("C:/Users/swapnajoshi-admin/Box Sync/DNA_methylation_R21_Analysis/temp/functional_norm/methBioconductorWorkflow/methylationSubgroups/colon/DMPs_sub13_fdr_md_kmeans.csv", row.names = 1)
+
+cell_juntions<-read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/GO_sub_13_Junction/synapse_cell_junction_kmeans.csv", row.names = 1); dim(cell_juntions)
+
+ion_chan<-read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/GO_sub_13_Junction/ion_transport_kmeans.csv", row.names = 1); dim(ion_chan)
+
+guanyl<-read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/GO_sub_13_Junction/guanylyl_exchange_kmeans.csv", row.names = 1); dim(guanyl)
+# neurotransmittor
+nt <- c("CPLX1", "CPLX2", "RIMS1", "RIMS4", "SLC13A5", "SLC17A6", "SLC20A2", "SLC24A4", "SLC6A15","SLC6A17", "SLC6A5", "SLC6A7", "SV2C")
+
+junction <- merge(cell_juntions,ion_chan, by= "row.names", all = TRUE); dim(junction)
+row.names(junction) <- junction[,1]
+junction <- merge(junction, guanyl, by= "row.names", all = TRUE); dim(junction)
+row.names(junction) <- junction[,1]
+junction <- junction[,-c(1,2)]
+
+dmp13.junction <- dmp13[dmp13$nearestGeneSymbol%in%row.names(junction),]; dim(dmp13.junction)
+junctMeth <- getBeta(GRsetColFunFlt.ibs13)[row.names(getBeta(GRsetColFunFlt.ibs13))%in%row.names(dmp13.junction),]; dim(dmp13.junction)
+rnaDat13 <- norRNAseq[, colnames(norRNAseq)%in%colnames(junctMeth)]; dim(rnaDat13)
+junctMeth <- junctMeth[,colnames(junctMeth)%in%colnames(rnaDat13)]; dim(junctMeth)
+junctMeth <- as.data.frame(junctMeth[,colnames(rnaDat13)])
+match(colnames(junctMeth), colnames(rnaDat13))
+dmp13.junction <- dmp13.junction[ row.names(junctMeth),]
+match(row.names(junctMeth), row.names(dmp13.junction))
+junctMeth$Symbol <- dmp13.junction$nearestGeneSymbol
+rnaDat13 <- as.data.frame(rnaDat13)
+rnaDat13$Symbol <- featureData[,2]
+junctExpr <- rnaDat13[which(rnaDat13$Symbol%in%junctMeth$Symbol==TRUE),]; dim(junctExpr)
+df1 <- merge(junctMeth, junctExpr, by = "Symbol", all = TRUE)
+df2 <- t (df1)
+colnames(df2) <- df2[1,]; df2 <- df2[-1,]
+colnames(df2) <- paste(colnames(df2),"Meth", sep = "_")
+df3 <- cbind(df2[1:56,],df2[57:112,])
+colnames(df3)[209:416] <- gsub("Meth","Expr",colnames(df3)[209:416])
+df4 <-  matrix(as.numeric(as.character(df3)), nrow= 56, ncol = 416)
+row.names(df4) <-  substr(row.names(df3),1,5)
+colnames(df4) <- colnames(df3)
+df4[,c(209:416)] <- apply(df4[,c(209:416)],2,scale)
+# row.names(df4) <- row.names(df3)
+
+library(mixOmics)
+color<-color.jet
+par(mfrow = c(1,2));
+png("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/mixOmics_MethGE_CellJunction.png", height=2000, width=3000, res=300)
+nr3c1_pheno <- imgCor(df4[,1:208], df4[,209:416], X.var.names = TRUE,
+                       Y.var.names = TRUE,
+                       sideColors = TRUE,
+                       interactive.dev = TRUE)
+                       # main = TRUE)
+# color, row.cex, col.cex,symkey, keysize,
+# xlab, ylab, margins, lhei, lwid)
+dev.off()
+
+# library(Hmisc)
+# cor <- rcorr(as.matrix(df4), type="pearson")
+# datCor<-round(cor$r, 2); dim(datCor)
+# datP <- cor$P; dim(datP)
+# df_1 <- as.data.frame(ifelse(datP<0.00025,1,0))[1:208,209:416]
+# sum1 <- apply(df_1,1,sum, na.rm = TRUE)
+# sum2 <- apply(df_1,2,sum, na.rm = TRUE)
+# sig1 <- as.data.frame(cbind(sum1 , sum2))
+# sig1$sumAll <- sig1$sum1 + sig1$sum2
+# sig <- subset(sig1, sig1$sumAll>0)
+# df2 <- subset(df_1, df_1$sum1>0); dim(df2)
+# df_1$sum2<- apply(df_1,2,sum, na.rm = TRUE)
+# df2$sum2 <- subset(df_1, df_1$sum1>0); dim(df2)
+# beta.col.stress2 <- beta.col.stress1[,colnames(beta.col.stress1)%in%row.names(df2)]
+# dim(beta.col.stress2)
+#  dim(beta.col.stress1)
+# [1] 138 256
+# z <- apply(corMatP_1, 2, function(x) {x<0.05})
+# corMatP_2 <- apply(corMatP_1, 1, function(x){x<0.05})
+# corMatP_2[grep("TRUE",corMatP_2[1,]),]
+
+# df5 <- df4[,colnames(df4)%in% row.names(sig)]; dim(df5)
+# df6 <- df4[, colnames(df4)%in% gsub("Meth","Expr",colnames(df5))]
+# library(mixOmics)
+# color<-color.jet
+# par(mfrow = c(1,2));
+# png("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/mixOmics_MethGE_CellJunction_sig_only.png", height=2000, width=3000, res=300)
+# nr3c1_pheno <- imgCor(df5, df6, X.var.names = TRUE,
+#                        Y.var.names = TRUE,
+#                        sideColors = TRUE,
+#                        interactive.dev = TRUE)
+#                        # main = TRUE)
+# # color, row.cex, col.cex,symkey, keysize,
+# # xlab, ylab, margins, lhei, lwid)
+# dev.off()
+
+# cor(df4[,1], df4[,209])
+df4 <- df4 [,-which(colnames(df4) %in% c("FGF3_Meth", "FGF3_Meth", "FGF4_Meth", "SLC13A5_Meth", "SLC17A6_Meth", "SLC17A6_Meth", "SLC6A17_Meth", "SLC6A5_Meth", "UCP1_Meth", "LCN10_Meth","CHRNA2_Meth","KCNA1_Meth","TRIM72_METH","FGF3_Meth", "KCNC2_Meth","FGF3_Expr", "FGF4_Expr", "SLC13A5_Expr", "SLC17A6_Expr", "SLC17A6_Expr", "SLC6A17_Expr", "SLC6A5_Expr", "UCP1_Expr","LCN10_Expr","CHRNA2_Expr", "KCNA1_Expr","CACNG2_Expr","AQP4_Expr","TRIM72_Expr","FGF3_Expr", "KCNC2_Expr"))]
+
+df4_1 <- df4 [,-which(colnames(df4) %in% c("CACNG2_Meth","AQP4_Meth", "CHRNA2_Meth", "FGF3_Meth", "FGF4_Meth","KCNA1_Meth", "KCNA1_Meth", "KCNC2_Meth","LCN10_Meth", "SLC13A5_Meth", "SLC17A6_Meth", "SLC6A17_Meth", "SLC6A5_Meth", "TRIM72_Meth", "UCP1_Meth", "CACNG2_Expr","AQP4_Expr", "CHRNA2_Expr", "FGF3_Expr", "FGF4_Expr","KCNA1_Expr", "KCNA1_Expr", "KCNC2_Expr","LCN10_Expr", "SLC13A5_Expr", "SLC17A6_Expr", "SLC6A17_Expr", "SLC6A5_Expr", "TRIM72_Expr", "UCP1_Expr"))]
+
+sig_df <- matrix(NA, nrow = 189, ncol = 2)
+for ( i in 1:189) 
+   {
+  sig_df[i,1] <- cor.test(df4_1[,i], df4_1[,i+189], method = 'spearman')$estimate
+   sig_df[i,2] <- cor.test(df4_1[,i], df4_1[,i+189], method = 'spearman')$p.value
+  }
+
+sig_df <-  as.data.frame(sig_df)
+sig_df$Symbol <- gsub("_Meth","",colnames(df4_1)[1:189])
+colnames(sig_df) <- c("Cor estimate", "p_value")
+sig_df <- as.data.frame(sig_df)
+sig_df[which(sig_df$p_value<0.05),]
+```
+# cor to be plotted
+```{r}
+which(sig_df$p_value<0.05)
+df7 <- as.data.frame(df4_1[, c(19  ,31 , 56 , 70, 102, 123, 137, 19+189,  31+189,  56+189,  70+189,  102+189, 123+189, 137+189)])
+```
+
+
+```{r}
+load("C:/Users/swapnajoshi-admin/Box Sync/DNA_methylation_R21_Analysis/colon_meth_subgrops_all.Rda")
+row.names(df3) <- substr(row.names(df3), 1, 5)
+subtype <- df3[row.names(df3)%in%row.names(df7),]
+subtype <- subtype[row.names(df7),]
+match(row.names(subtype), row.names(df7))
+df7 <- as.data.frame(df7)
+subtype <- as.data.frame(subtype)
+df7$kmeans_3 <- as.factor(subtype$kmeans_clu3)
+
+p <- ggplot(data = df7, aes(BTF3_Expr,BTF3_Meth, color = kmeans_3))
+p1 <- p + geom_point()  + geom_smooth(method = 'lm', se = FALSE)
+p1
+p <- ggplot(data = df7, aes(CHRNA3_Expr,CHRNA3_Meth, color = kmeans_3))
+p2 <- p + geom_point()  + geom_smooth(method = 'lm', se = FALSE)
+p2
+p <- ggplot(data = df7, aes(FXYD7_Expr,FXYD7_Meth, color = kmeans_3))
+p3 <- p + geom_point()  + geom_smooth(method = 'lm', se = FALSE)
+p3
+p <- ggplot(data = df7, aes(GRID1_Expr,GRID1_Meth, color = kmeans_3))
+p4 <- p + geom_point()  + geom_smooth(method = 'lm', se = FALSE)
+p4
+p <- ggplot(data = df7, aes(NLGN1_Expr,NLGN1_Meth, color = kmeans_3))
+p5 <- p + geom_point()  + geom_smooth(method = 'lm', se = FALSE)
+p5
+p <- ggplot(data = df7, aes(PSMB9_Expr,PSMB9_Meth, color = kmeans_3))
+p6 <- p + geom_point()  + geom_smooth(method = 'lm', se = FALSE)
+p6
+p <- ggplot(data = df7, aes(RIMS4_Expr,RIMS4_Meth, color = kmeans_3))
+p7 <- p + geom_point()  + geom_smooth(method = 'lm', se = FALSE)
+p7
+
+library(gridExtra)
+grid.arrange(as.list(p1,p2,p3,p4,p5,p6,p7,p8), ncol= 2)
+
+```
+
+Gene expression changes between cluster 1 and 3
+
+```{r}
+dds13 <-  dds[,colnames(dds)%in%colnames(junctExpr)]
+res <- results(dds13, contrast=c("K_means","1","3"))
+
+
+
+rnaDat13[row.names(rnaDat13)%in%c("ENSG00000225630" ),]$Symbol
+res$Symbol <- rnaDat13$Symbol
+
+resfdr05 <- subset(res, res$padj<0.05)
+resP05 <- subset(res, res$pvalue<0.05)
+# mcols(dds13) <- cbind(mcols(dds13), res)
+res <- res[order(res$pvalue),]
+write.csv(resP05, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/Subtype13ExprResP05.csv")
+```
+
+
+# TJP expression
+
+```{r}
+# permeability subjects
+
+per <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSinetstinalPermeabilityProject/data/technicallyCorrectData/permeabilityData.csv", sep = ",", row.names = 1);
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/rnaQuantseqAllExpr.rda")
+tjp <- c("TJP1", "TJP2","TJP3","F11R","OCLN", "CLDN1","CLDN2", "CHRM2","CHRM1","CHRM3")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/r21geneSilencing_dat.Rda")
+pheno2$Group <- as.factor(pheno2$Group)
+pheno2$Gender <- as.factor(pheno2$Gender)
+pheno2$BH <- as.factor(pheno2$BH_Colon_Exam)
+pheno2$Lane<- as.factor(pheno2$Lane)
+
+p3 <- subset(pheno2, row.names(pheno2))
+
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix (countData = rnaDat,
+                              colData = pheno2,
+                              design= ~ Lane + Group)
+keep <- rowSums(counts(dds)) >= 5
+dds <- dds[keep,]
+dds <- DESeq(dds)
+
+
+
+
+
+
+
+
+
+serotonin <- c("SLC6A4","S100A10","TPH1","S100A8","S100A9","SLC6A4","TPH1")
+resAll <- read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/temp/RNAseqAnnotRes.csv")
+restjp <- resAll[resAll$V2%in%tjp,]; dim(restjp)
+library(knitr)
+kable(restjp[,c(29,32,35,36)])
+```
+# Expression differences between clutsers
+
+```{r}
+
+```
+
+
+# Expression differences by bowel habit and gender
+
+```{r}
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/r21geneSilencing_dat.Rda")
+pheno2$Group <- as.factor(pheno2$Group)
+pheno2$Lane<- as.factor(pheno2$Lane)
+
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix (countData = rnaDat,
+                              colData = pheno2,
+                              design= ~ Lane + Group)
+```
+

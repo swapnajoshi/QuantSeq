@@ -1,0 +1,655 @@
+---
+title: "quantseq_methylation_GE_integration"
+author: "Swapna Mahurkar-Joshi"
+date: "December 1, 2017"
+output: html_document
+---
+
+### Methylation gene expression integration
+
+# Starburst plot
+```{r}
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/data1/consistant_data/colon_meth_level4.rda")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/temp1/res3_functional_norm/methBioconductorWorkflow/colon/Dx/ColDxDMPsAn.rda")
+colDxDMPs_sig_p05  <- subset(colDxDMPsAn, colDxDMPsAn$pval<0.05);
+datM <- col_meth_level4[["col_betas"]]
+
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/normGEData.rda")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/Data/consistantData/metaDat.rda")
+metDat_c <- col_meth_level4[["metDat_c"]]
+metDat_c_ibs <- metDat_c[metDat_c$Group==2,]
+metDat_c_hc <- metDat_c[metDat_c$Group==1,]
+```
+
+```{r}
+datG <- normGEData[,colnames(normGEData)%in%colnames(datM)]; dim(datG)
+datM <- datM[,colnames(datM) %in% colnames(datG)]; dim(datM)
+datM <- datM[,colnames(datG)]; dim(datM); dim(datG)
+all.equal(colnames(datM), colnames(datG))
+
+```
+
+```{r}
+library(stringi)
+s1 <- stri_split_fixed(colDxDMPsAn$UCSC_RefGene_Name,";")
+n <- max(sapply(s1, length))
+l <- lapply(s1, function(X) c(X, rep(NA, n - length(X))))
+colDxDMPsAn$GeneSymbol <- data.frame(t(do.call(cbind, l)))[1]
+colDxDMPsAn[,32] <- setNames(colDxDMPsAn[,32], "GeneSymbol")
+colDxDMPsAn <- as.data.frame(colDxDMPsAn)
+# colDxDMPsAn$GeneSymbol
+
+```
+
+```{r}
+colDxDMPsAn <- colDxDMPsAn[row.names(datM),]
+all.equal(row.names(datM), row.names(colDxDMPsAn))
+datM <-  as.data.frame(datM)
+datM$GeneSymbol <- colDxDMPsAn$GeneSymbol
+datM$pval     <- colDxDMPsAn$pval
+datM$qval     <- colDxDMPsAn$qval
+datM$meanDiff <- colDxDMPsAn$meanDiff
+
+#Selection of one probe for each gene showing the highest absolute mean β-value difference between IBS and HC:
+
+datM$meanDiffAbs <- abs(datM$meanDiff)
+datM1            <- datM[rev(order(datM$meanDiffAbs)),]
+datM1$uniqGene <- !duplicated(datM1$GeneSymbol)
+datM1 <- subset(datM1, datM1$uniqGene == "TRUE")
+dim(datM1)
+datM <- datM1[2:19343, ]# remove the symbolless gene
+```
+
+# Annotate gene expression 
+
+```{r}
+QDxResR21 <-  read.csv("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/DESeq/Dx/DxDeseqResAn.csv", row.names = 1)
+QDxResR21 <- as.data.frame(QDxResR21)
+```
+
+```{r}
+library(stringi)
+s1 <- stri_split_fixed(QDxResR21$gene_name,".")
+n <- max(sapply(s1, length))
+l <- lapply(s1, function(X) c(X, rep(NA, n - length(X))))
+QDxResR21$GeneSymbol <- data.frame(t(do.call(cbind, l)))[1]
+QDxResR21[,11] <- setNames(QDxResR21[,11], "GeneSymbol")
+QDxResR21 <- as.data.frame(QDxResR21)
+# colDxDMPsAn$GeneSymbol
+```
+
+```{r}
+datG <-  as.data.frame(datG)
+datG <- datG[row.names(datG)%in%row.names(QDxResR21),]
+datG <- datG[row.names(QDxResR21),]
+all.equal(row.names(QDxResR21),row.names(datG))
+datG$pvalue_GE     <- QDxResR21$pvalue  
+datG$padj_GE       <- QDxResR21$padj
+datG$GeneSymbol <- QDxResR21$GeneSymbol
+datG$FC <- ifelse(QDxResR21$log2FoldChange<0, -1*(2^(abs(QDxResR21$log2FoldChange))), 2^QDxResR21$log2FoldChange)
+datG$log2FC <- NULL
+datM$UCSC_RefGene_Name <- NULL
+datG$FCabs <- abs(datG$FC)
+
+# Selection of one probe for each gene showing the highest absolute FC between IBS and HC:
+datG1          <- datG[rev(order(datG$FCabs)),]
+datG1$uniqGene <- !duplicated(datG1$GeneSymbol)
+datG1 <- subset(datG1, datG1$uniqGene == "TRUE")
+dim(datG1)
+datG <- datG1
+datG$uniqGene <- NULL
+dim(datM)
+dim(datG)
+```
+
+```{r}
+#> dim(dat.meth.unique.clu3.nonclu3)
+#[1] 12472    10
+save(datM, datG, file="C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/starburst/datMG.Rda")
+```
+
+```{r}
+datM<- as.data.frame(datM)
+datM$ProbeID <- row.names(datM)
+colnames(datM) <- paste(colnames(datM),"Meth", sep = "_")
+colnames(datM)[137] <- substr(colnames(datM)[137],1,10)
+colnames(datG) <- paste(colnames(datG),"GE", sep = "_")
+colnames(datG)[136] <- substr(colnames(datG)[136],1,10)
+
+library(plyr)
+datM$GeneSymbol <- gsub(" ","", datM$GeneSymbol)
+datG$GeneSymbol <- gsub(" ", "", datG$GeneSymbol)
+
+datMerged            <- join(datM, datG)
+# datMerged            <- merge(datM[,c(1:133,137)], datG[,c(1:133,136)], by = "GeneSymbol")
+row.names(datMerged) <- paste(datMerged$GeneSymbol,datMerged$ProbeID_Meth, sep = "_") 
+datMerged1            <- datMerged[,c(1:133,140:272)]
+
+dim(datMerged1)
+
+ibs.samp <- c(paste(row.names(metDat_c_ibs),"_Meth", sep = ""),paste(row.names(metDat_c_ibs),"_GE", sep = ""))
+
+hc.samp <- c(paste(row.names(metDat_c_hc),"_Meth", sep = ""),paste(row.names(metDat_c_hc),"_GE", sep = ""))
+```
+
+```{r}
+
+datMerged1 <- as.matrix(datMerged1)
+datMerged1 <- na.omit(datMerged1); dim(datMerged1)
+x.cor<-matrix(nrow=12122,ncol=2)
+
+for (k in 1:12122){
+      cat(print(k),'\n')
+    x.cor[k,1]<-cor(datMerged1[k,c(1:133)],datMerged1[k,c(134:266)],method="spearman",use="complete.obs")
+    x.cor[k,2]<-cor.test(datMerged1[k,c(1:133)],datMerged1[k,c(134:266)],method="spearman",use="complete.obs")$p.value
+  }
+
+colnames(x.cor)<- c( "Spearman_cor","rawp")
+x.cor <- as.data.frame(x.cor)
+x.cor$id <- row.names(datMerged1)
+library(multtest)
+x.cor <- as.data.frame(x.cor)
+x.cor$rawp<-as.numeric(as.character(x.cor$rawp))
+x.cor$Spearman_cor <- as.numeric(as.character(x.cor$Spearman_cor))
+x.cor$adjp<-p.adjust(x.cor$rawp,method="BH")
+x.cor <- x.cor[order(x.cor$rawp),]
+x.cor_sig <- subset(x.cor, x.cor$adjp<0.05); dim(x.cor_sig)
+x.cor_sil <- subset(x.cor_sig, x.cor_sig$Spearman_cor<0); dim(x.cor_sil)
+x.cor_sil$methDx_p <- datM[datM$GeneSymbol%in%matrix(unlist(strsplit(x.cor_sil$id,"_")), nrow = 19, ncol = 2, byrow = TRUE)[,1],][,134]
+x.cor_sil$GEDx_p <- datG[datG$GeneSymbol%in%matrix(unlist(strsplit(x.cor_sil$id,"_")), nrow = 19, ncol = 2, byrow = TRUE)[,1],][,134]
+```
+
+```{r}
+save(datG, datM, datMerged, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/MethGECorrData_New.Rda")
+save(x.cor, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/methGECor_full_New.rda")
+x.cor_sig <- subset(x.cor, x.cor$adjp<0.05)
+x.cor_sig_sil <- subset(x.cor_sig, x.cor_sig$Spearman_cor <0)
+length(unique(x.cor_sig_sil$`Gene Symbol`))
+
+save(x.cor_sig, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/SigMethGECorr.rda")
+write.csv(x.cor_sig, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/SigMethGECorr.csv")
+write.csv(x.cor_sil, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/x.cor_sil.csv")
+
+```
+
+
+correlation IBS and HC separatly
+
+```{r}
+# IBS
+datMergedIbs <- datMerged1[, colnames(datMerged1)%in%ibs.samp]
+x.cor<-matrix(nrow=12122,ncol=2)
+
+for (k in 1:12122){
+      cat(print(k),'\n')
+    x.cor[k,1]<-cor(datMergedIbs[k,c(1:97)],datMergedIbs[k,c(98:194)],method="spearman",use="complete.obs")
+    x.cor[k,2]<-cor.test(datMergedIbs[k,c(1:97)],datMergedIbs[k,c(98:194)],method="spearman",use="complete.obs")$p.value
+  }
+
+colnames(x.cor)<- c( "Spearman_cor","rawp")
+x.cor <- as.data.frame(x.cor)
+x.cor$id <- row.names(datMergedIbs)
+# library(multtest)
+x.cor <- as.data.frame(x.cor)
+x.cor$rawp<-as.numeric(as.character(x.cor$rawp))
+x.cor$Spearman_cor <- as.numeric(as.character(x.cor$Spearman_cor))
+x.cor$adjp<-p.adjust(x.cor$rawp,method="BH")
+x.cor <- x.cor[order(x.cor$rawp),]
+x.cor_sig <- subset(x.cor, x.cor$adjp<0.05); dim(x.cor_sig)
+x.cor_sil <- subset(x.cor_sig, x.cor_sig$Spearman_cor<0); dim(x.cor_sil)
+x.cor_sil$methDx_p <- datM[datM$GeneSymbol%in%matrix(unlist(strsplit(x.cor_sil$id,"_")), nrow = 19, ncol = 2, byrow = TRUE)[,1],][,134]
+x.cor_sil$GEDx_p <- datG[datG$GeneSymbol%in%matrix(unlist(strsplit(x.cor_sil$id,"_")), nrow = 19, ncol = 2, byrow = TRUE)[,1],][,134]
+
+save(x.cor_sig, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/SigMethGECorr_ibs.rda")
+write.csv(x.cor_sig, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/SigMethGECorr_ibs.csv")
+write.csv(x.cor_sil, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/x.cor_sil_ibs.csv")
+
+
+# HC
+datMergedhc <- datMerged1[, colnames(datMerged1)%in%hc.samp]
+x.cor.hc<-matrix(nrow=12122,ncol=2)
+
+for (k in 1:12122){
+      cat(print(k),'\n')
+    x.cor.hc[k,1]<-cor(datMergedhc[k,c(1:36)],datMergedhc[k,c(37:72)],method="spearman",use="complete.obs")
+    x.cor.hc[k,2]<-cor.test(datMergedhc[k,c(1:36)],datMergedhc[k,c(37:72)],method="spearman",use="complete.obs")$p.value
+  }
+
+colnames(x.cor.hc)<- c( "Spearman_cor","rawp")
+x.cor.hc <- as.data.frame(x.cor.hc)
+x.cor.hc$id <- row.names(datMerged1)
+# library(multtest)
+x.cor.hc <- as.data.frame(x.cor.hc)
+x.cor.hc$rawp<-as.numeric(as.character(x.cor.hc$rawp))
+x.cor.hc$Spearman_cor <- as.numeric(as.character(x.cor.hc$Spearman_cor))
+x.cor.hc$adjp<-p.adjust(x.cor.hc$rawp,method="BH")
+x.cor.hc <- x.cor[order(x.cor.hc$rawp),]
+x.cor.hc_sig <- subset(x.cor.hc, x.cor.hc$adjp<0.05); dim(x.cor.hc_sig)
+x.cor.hc_sil <- subset(x.cor.hc_sig, x.cor.hc_sig$Spearman_cor<0); dim(x.cor.hc_sil)
+x.cor.hc_sil$methDx_p <- datM[datM$GeneSymbol%in%matrix(unlist(strsplit(x.cor_sil$id,"_")), nrow = 19, ncol = 2, byrow = TRUE)[,1],][,134]
+x.cor.hc_sil$GEDx_p <- datG[datG$GeneSymbol%in%matrix(unlist(strsplit(x.cor_sil$id,"_")), nrow = 19, ncol = 2, byrow = TRUE)[,1],][,134]
+
+save(x.cor.hc_sig, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/SigMethGECorr_hc.rda")
+write.csv(x.cor.hc_sig, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/SigMethGECorr_hc.csv")
+write.csv(x.cor.hc_sil, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/x.cor_sil_hc.csv")
+
+
+uniSilIbs <- x.cor_sil[!row.names(x.cor_sil)%in%row.names(x.cor.hc_sil),]
+```
+
+# Starburst plot
+
+```{r}
+datMerged_st <- as.data.frame(merge(datM[,c(134:139)], datG[,c(134:138)], by = "GeneSymbol"))
+```
+
+
+```{r}
+#add a column for log 10 if md beta value is less than 0 and -log 10 if md beta is >=0
+
+datMerged_st$logP.meth<-NA
+
+for (i in 1:12122) {
+	if (datMerged_st[i,4] < 0)	{
+		datMerged_st[i,11] <- log(datMerged_st[i,2],10)
+	}
+	else if (datMerged_st[i,4] > 0) {
+		datMerged_st[i,11] <- -log(datMerged_st[i,2],10)
+	}
+}
+
+#add a column for log 10 if expression md value is less than 0 and -log 10 if expression md is >=0
+datMerged_st$logP.GE<-NA
+
+for (i in 1:12122) {
+	if (datMerged_st[i,9] < 0){
+		datMerged_st[i,12] <- log(datMerged_st[i,7],10)
+	}
+	else if (datMerged_st[i,9] > 0) {
+		datMerged_st[i,12] <- -log(datMerged_st[i,7],10)
+	}
+}
+
+save(datMerged_st,file="C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/starburst/datMerged_st.rda")
+```
+
+```{r}
+library(ggplot2)
+datMerged_st$sigLogP <- datMerged_st$logP.meth > 1.301 &
+		datMerged_st$logP.GE <= -1.301
+ 
+p1 <- ggplot(datMerged_st,	aes(logP.meth, logP.GE, color = sigLogP))
+
+p1.1 <- p1 +	geom_vline(xintercept = 0) +
+		geom_hline(yintercept = 0) +
+		geom_point(size = 1.8) + theme_bw() +
+		scale_colour_manual(values = c(`FALSE` = "darkgrey",`TRUE` = "red")) +
+		coord_cartesian(xlim =  c(-5.0, 5.0), ylim = c(-5, 5)) +
+		
+		geom_vline(xintercept = c(-0.2, 0.2),
+				linetype = 2, size = 0.25, color = "darkgray") +
+		
+		geom_hline(yintercept = c(1, -1),
+				linetype = 2, size = 0.25, color = "darkgray") 
+		 #+opts(legend.position = "none")
+png("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/starburst/starburstNew1.png", res = 300, height = 2000, width = 2500)
+p1.1
+dev.off()
+```
+
+```{r}
+sig_star <- datMerged_st[datMerged_st$sigLogP,]
+```
+
+
+```{r}
+library(knitr)
+kable(datMerged_st[datMerged_st$sigLogP,c(1,2,4,6,7,9)])
+sig_starburst <- datMerged_st[datMerged_st$sigLogP,c(1,2,4,6,7,9)]
+save(sig_starburst, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/starburst/starburst_sig_genes_allmethGE.rda")
+write.csv(sig_starburst, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/starburst/starburst_sig_genes_allmethGE.csv")
+```
+
+# Correlation between DNA methylation and GE for these genes
+
+```{r}
+
+
+sig_star
+starCorDat <- merge(datM[row.names(datM)%in%sig_star$ProbeID_Meth,c(1:133,137,139)],datG[datG$GeneSymbol %in%sig_star$GeneSymbol,c(1:133,136)], by = "GeneSymbol")
+row.names(starCorDat) <- paste(starCorDat$GeneSymbol,starCorDat$ProbeID_Meth, sep = "_"); dim(starCorDat)
+```
+
+```{r}
+x.cor<-matrix(nrow=8,ncol=2)
+starCorDat$GeneSymbol <- NULL
+starCorDat$ProbeID_Meth <- NULL
+
+starCorDat <- as.matrix(starCorDat)
+
+for (k in 1:8){
+      cat(print(k),'\n')
+    x.cor[k,1]<-cor(starCorDat[k,c(1:133)],starCorDat[k,c(134:266)],method="spearman",use="complete.obs")
+    x.cor[k,2]<-cor.test(starCorDat[k,c(1:133)],starCorDat[k,c(134:266)],method="spearman",use="complete.obs")$p.value
+  }
+
+colnames(x.cor)<- c( "Spearman_cor","rawp")
+x.cor <- as.data.frame(x.cor)
+x.cor$id <- row.names(starCorDat)
+library(multtest)
+x.cor <- as.data.frame(x.cor)
+x.cor$rawp<-as.numeric(as.character(x.cor$rawp))
+x.cor$Spearman_cor <- as.numeric(as.character(x.cor$Spearman_cor))
+x.cor$adjp<-p.adjust(x.cor$rawp,method="BH")
+x.cor <- x.cor[order(x.cor$rawp),]
+x.cor_sig <- subset(x.cor, x.cor$adjp<0.05); dim(x.cor_sig)
+x.cor_sil <- subset(x.cor_sig, x.cor_sig$Spearman_cor<0)
+x.cor_sil$methDx_p <- datG[datG$GeneSymbol%in%matrix(unlist(strsplit(x.cor_sil$id,"_")), nrow = 19, ncol = 2, byrow = TRUE)[,1],][,134]
+```
+
+###############################################################################
+
+
+
+# Cluster 1 vs cluster3
+```{r}
+# methylation Differences
+# Gene expression differences
+# merging data
+# significant 
+# starburst
+```
+
+```{r}
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/Methyl_paper_1_2_2018/subtypes_colon/DMPs_sub13.rda")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/Methyl_paper_1_2_2018/subtypes_colon/df3.rda")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/IBSdnaMethylationProject/Methyl_paper_1_2_2018/subtypes_colon/QDxResR21.kmeans13.rda")
+
+```
+
+```{r}
+
+s1 <- stri_split_fixed(DMPs_sub13$UCSC_RefGene_Name,";")
+n <- max(sapply(s1, length))
+l <- lapply(s1, function(X) c(X, rep(NA, n - length(X))))
+DMPs_sub13$GeneSymbol <- data.frame(t(do.call(cbind, l)))[1]
+DMPs_sub13[,34] <- setNames(DMPs_sub13[,34], "GeneSymbol")
+```
+
+```{r}
+datBeta2 <- col_meth_level4[["col_betas"]]
+datBeta2 <- datBeta2[row.names(DMPs_sub13),]
+normGEData1 <- normGEData[row.names(normGEData)%in%row.names(QDxResR21.kmeans13),]
+normGEData1 <- normGEData1[row.names(QDxResR21.kmeans13),]
+all.equal(row.names(datBeta2), row.names(DMPs_sub13))
+all.equal(row.names(normGEData1), row.names(QDxResR21.kmeans13))
+
+datM     <- cbind(datBeta2[, colnames(datBeta2) %in% row.names(subset(df3, df3$kmeans_clu3==1|df3$kmeans_clu3==3))], DMPs_sub13[,c(30,31,33,34)])
+
+datG     <- cbind(normGEData1 [, colnames(normGEData1)%in% colnames(datM)], as.data.frame(QDxResR21.kmeans13[,c(2,5,6,7)]))
+
+```
+
+```{r}
+#Selection of one probe for each gene showing the highest absolute mean β-value difference between IBS and HC:
+
+datM$meanDiffAbs <- abs(datM$meanDiff)
+datM1            <- datM[rev(order(datM$meanDiffAbs)),]
+datM1$uniqGene <- !duplicated(datM1$GeneSymbol)
+datM1 <- subset(datM1, datM1$uniqGene == "TRUE")
+dim(datM1)
+datM <- datM1[c(1:2,4:19343), ]# remove the symbolless gene
+```
+
+# Annotate gene expression 
+
+```{r}
+
+datM$UCSC_RefGene_Name <- NULL
+datM$uniqGene <- NULL
+datG$FClog2abs <- abs(datG$log2FoldChange)
+colnames(datG)[60] <- "GeneSymbol"
+# Selection of one probe for each gene showing the highest absolute FC between IBS and HC:
+datG1          <- datG[rev(order(datG$FClog2abs)),]
+datG1$uniqGene <- !duplicated(datG1$GeneSymbol)
+datG1 <- subset(datG1, datG1$uniqGene == "TRUE")
+dim(datG1)
+datG <- datG1
+datG$uniqGene <- NULL
+dim(datM)
+dim(datG)
+```
+
+```{r}
+#> dim(dat.meth.unique.clu3.nonclu3)
+#[1] 12472    10
+save(datM, datG, file="C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/starburst/datMG_cluster13.Rda")
+```
+
+```{r}
+datM<- as.data.frame(datM)
+datM$ProbeID <- row.names(datM)
+colnames(datM) <- paste(colnames(datM),"Meth", sep = "_")
+colnames(datM)[62] <- substr(colnames(datM)[62],1,10)
+colnames(datG) <- paste(colnames(datG),"GE", sep = "_")
+colnames(datG)[60] <- substr(colnames(datG)[60],1,10)
+
+library(plyr)
+datM$GeneSymbol <- gsub(" ","", datM$GeneSymbol)
+datG$GeneSymbol <- gsub(" ", "", datG$GeneSymbol)
+
+datMerged            <- join(datM, datG)
+# datMerged            <- merge(datM[,c(1:133,137)], datG[,c(1:133,136)], by = "GeneSymbol")
+row.names(datMerged) <- paste(datMerged$GeneSymbol,datMerged$ProbeID_Meth, sep = "_") 
+datMerged            <- datMerged[,c(1:58,65:120)]
+
+dim(datMerged)
+```
+
+```{r}
+
+datMerged <- as.matrix(datMerged)
+datMerged1 <- datMerged[,!colnames(datMerged)%in%c("A5935_Meth","A6040_Meth")]
+datMerged1 <- na.omit(datMerged1); dim(datMerged1)
+datMerged1 <- as.matrix(datMerged1)
+x.cor<-matrix(nrow=11354,ncol=2)
+
+for (k in 1:11354){
+      cat(print(k),'\n')
+    x.cor[k,1]<-cor(datMerged1[k,c(1:56)],datMerged1[k,c(57:112)],method="spearman",use="complete.obs")
+    x.cor[k,2]<-cor.test(datMerged1[k,c(1:56)],datMerged1[k,c(57:112)],method="spearman",use="complete.obs")$p.value
+  }
+
+colnames(x.cor)<- c( "Spearman_cor","rawp")
+x.cor <- as.data.frame(x.cor)
+x.cor$id <- row.names(datMerged1)
+library(multtest)
+x.cor <- as.data.frame(x.cor)
+x.cor$rawp<-as.numeric(as.character(x.cor$rawp))
+x.cor$Spearman_cor <- as.numeric(as.character(x.cor$Spearman_cor))
+x.cor$adjp<-p.adjust(x.cor$rawp,method="BH")
+x.cor <- x.cor[order(x.cor$rawp),]
+x.cor_sig <- subset(x.cor, x.cor$adjp<0.1); dim(x.cor_sig)
+x.cor_sil <- subset(x.cor_sig, x.cor_sig$Spearman_cor<0)
+x.cor_sil$methDx_p <- datG[datG$GeneSymbol%in%matrix(unlist(strsplit(x.cor_sil$id,"_")), nrow = 19, ncol = 2, byrow = TRUE)[,1],][,134]
+```
+
+```{r}
+save(datG, datM, datMerged1, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/MethGECorrData_New_cluster13.Rda")
+save(x.cor, file = "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/methGECor_cluster13_New.rda")
+
+save(x.cor_sig, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/SigMethGECorrCluster13.rda")
+
+write.csv(x.cor_sig, file= "C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/SigMethGECorrcluster13.csv")
+
+```
+#### for starburst
+
+
+
+```{r}
+datM <- datM[,!colnames(datM)%in%c("A5935_Meth","A6040_Meth")]
+datMerged_st13           <- merge(datM[,57:62], datG[,57:61], by = "GeneSymbol")
+row.names(datMerged_st13) <- paste(datMerged_st13$GeneSymbol,datMerged_st13$ProbeID_Meth, sep = "_")
+datMerged_st13$GeneSymbol <- NULL
+datMerged_st13$uniqGene <- NULL
+
+```
+
+
+```{r}
+#add a column for log 10 if md beta value is less than 0 and -log 10 if md beta is >=0
+
+datMerged_st13$logP.meth<-NA
+
+for (i in 1:11354) {
+	if (datMerged_st13[i,3] < 0)	{
+		datMerged_st13[i,10] <- log(datMerged_st13[i,1],10)
+	}
+	else if (datMerged_st13[i,3] > 0) {
+		datMerged_st13[i,10] <- -log(datMerged_st13[i,1],10)
+	}
+}
+
+#add a column for log 10 if expression md value is less than 0 and -log 10 if expression md is >=0
+datMerged_st13$logP.GE<-NA
+
+for (i in 1:11354) {
+	if (datMerged_st13[i,6] < 0){
+		datMerged_st13[i,11] <- log(datMerged_st13[i,7],10)
+	}
+	else if (datMerged_st13[i,6] > 0) {
+		datMerged_st13[i,11] <- -log(datMerged_st13[i,7],10)
+	}
+}
+
+save(datMerged_st13,file="C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/starburst/datMergedCluster13.rda")
+```
+
+```{r}
+library(ggplot2)
+datMerged_st13$sigLogP <- datMerged_st13$logP.meth > 1.301 &
+		datMerged_st13$logP.GE <= -1.301
+ 
+p1 <- ggplot(datMerged_st13,	aes(logP.meth, logP.GE, color = sigLogP))
+
+p1.1 <- p1 +	geom_vline(xintercept = 0) +
+		geom_hline(yintercept = 0) +
+		geom_point(size = 1.8) + theme_bw() +
+		scale_colour_manual(values = c(`FALSE` = "darkgray",`TRUE` = "red")) +
+		coord_cartesian(xlim =  c(-9.0, 9.0), ylim = c(-4, 4)) +
+		
+		geom_vline(xintercept = c(-0.2, 0.2),
+				linetype = 2, size = 0.25, color = "darkgray") +
+		
+		geom_hline(yintercept = c(1, -1),
+				linetype = 2, size = 0.25, color = "darkgray") 
+		 #+opts(legend.position = "none")
+png("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/starburst/starburstCluster13New1.png", res = 300, height = 2000, width = 2500)
+p1.1
+dev.off()
+```
+```{r}
+sig_star_cluster13 <- datMerged_st13[datMerged_st13$sigLogP,]
+dim(sig_star_cluster13)
+```
+
+
+```{r}
+library(knitr)
+kable(datMerged_st13[datMerged_st13$sigLogP,c(1,2,3,6,7,8)])
+```
+
+
+##################
+
+on server 
+```{r}
+datM1 <- subset(datM, datM$GeneSymbol!="")
+# [1] 322205    134
+
+rownames(datM1) <- paste(rownames(datM1),datM1$GeneSymbol, sep = "_")
+
+datMG <- merge(datM, datG, by = "GeneSymbol", all.x = TRUE)
+merge.with.order <- function(x,y, ..., sort = T, keep_order)
+	{
+		# this function works just like merge, only that it adds the option to return the merged data.frame ordered by x (1) or by y (2)
+		add.id.column.to.data <- function(DATA)
+		{
+			data.frame(DATA, id... = seq_len(nrow(DATA)))
+		}
+		# add.id.column.to.data(data.frame(x = rnorm(5), x2 = rnorm(5)))
+		order.by.id...and.remove.it <- function(DATA)
+		{
+			# gets in a data.frame with the "id..." column.  Orders by it and returns it
+			if(!any(colnames(DATA)=="id...")) stop("The function order.by.id...and.remove.it only works with data.frame objects which includes the 'id...' order column")
+ 
+			ss_r <- order(DATA$id...)
+			ss_c <- colnames(DATA) != "id..."
+			DATA[ss_r, ss_c]
+		}
+ 
+		# tmp <- function(x) x==1; 1	# why we must check what to do if it is missing or not...
+		# tmp()
+ 
+		if(!missing(keep_order))
+		{
+			if(keep_order == 1) return(order.by.id...and.remove.it(merge(x=add.id.column.to.data(x),y=y,..., sort = FALSE)))
+			if(keep_order == 2) return(order.by.id...and.remove.it(merge(x=x,y=add.id.column.to.data(y),..., sort = FALSE)))
+			# if you didn't get "return" by now - issue a warning.
+			warning("The function merge.with.order only accepts NULL/1/2 values for the keep_order variable")
+		} else {return(merge(x=x,y=y,..., sort = sort))}
+	}
+ 
+datMG <- merge.with.order(datM, datG1, by='GeneSymbol', all.X = T, sort=F , keep_order=1)
+datMG$id2 <- paste(datMG$GeneSymbol, datM$id, sep = "_")
+datMG1 <- t(datMG)
+datM2 <- datMG1[2:134,]
+colnames(datM2) <- datMG1[269,]
+row.names(datM2) <- substr(row.names(datM2),1,5)
+
+datG2 <- datMG1[136:268,]
+datMerged <- rbind(datM3, datG3)
+```
+
+```{r}
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/methylationGE_int_allCpGs/datMerged_files.Rda")
+load("C:/Users/swapnajoshi-admin/Documents/GIT_workspace/QuantSeq_RNAseq/methGE_integration/methylationGE_int_allCpGs/colon_meth_level4.rda")
+metDat_c <- col_meth_level4[["metDat_c"]]
+
+# datMerged1 <- datMerged[,!colnames(datMerged)%in%c("A5935_Meth","A6040_Meth")]
+datMerged <- na.omit(datMerged); dim(datMerged)
+datMerged1 <- as.matrix(datMerged)
+metDat_c1 <- metDat_c[row.names(metDat_c)%in%row.names(datMerged1),]
+metDat_c1 <- metDat_c[row.names(datMerged1),]
+datMerged1 <- as.data.frame(datMerged1)
+datMerged1$BH <- metDat_c1$BH_Colon_Exam
+datMerged1$platform <- c(rep("Me",133),rep("Ge",133))
+x.cor<-matrix(nrow=234588,ncol=2)
+
+summary(lm(datMerged1[,1] ~  datMerged1[,234590] + datMerged1[,234589] ))
+
+for (k in 1:234588){
+      cat(print(k),'\n')
+    x.cor[k,1]<-cor(datMerged1[c(1:133),k],datMerged1[c(134:266),k],method="spearman",use="complete.obs")
+    x.cor[k,2]<-cor.test(datMerged1[c(1:133),k],datMerged1[c(134:266),k],method="spearman",use="complete.obs")$p.value
+  }
+save(x.cor, file ="x.cor.rda")
+colnames(x.cor)<- c( "Spearman_cor","rawp")
+x.cor <- as.data.frame(x.cor)
+x.cor$id <- row.names(datMerged1)
+library(multtest)
+x.cor <- as.data.frame(x.cor)
+x.cor$rawp<-as.numeric(as.character(x.cor$rawp))
+x.cor$Spearman_cor <- as.numeric(as.character(x.cor$Spearman_cor))
+x.cor$adjp<-p.adjust(x.cor$rawp,method="BH")
+x.cor <- x.cor[order(x.cor$rawp),]
+x.cor_sig <- subset(x.cor, x.cor$adjp<0.05); dim(x.cor_sig)
+x.cor_sil <- subset(x.cor_sig, x.cor_sig$Spearman_cor<0)
+x.cor_sig$Expr_p <- merge.with.order(x.cor_sig, QDxResR21, by='GeneSymbol', all.X = T, sort=F , keep_order=1)[,11]
+x.cor_sig$Meth_p <- colDxDMPsAn[row.names(colDxDMPsAn)%in%matrix(unlist(strsplit(x.cor_sig$id,"_")), nrow = 233, ncol = 2, byrow = TRUE)[,2],3]
+
+
+merge.with.order(x.cor_sig, QDxResR21, by='GeneSymbol', all.X = T, sort=F , keep_order=1)[,11]
+```
+
